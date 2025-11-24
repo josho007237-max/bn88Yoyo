@@ -1,0 +1,478 @@
+// src/services/inbound/processIncomingMessage.ts
+
+import { prisma } from "../../lib/prisma";
+import { getOpenAIClientForBot } from "../openai/getOpenAIClientForBot";
+import { sseHub } from "../../lib/sseHub";
+
+export type SupportedPlatform = "line" | "telegram" | "facebook";
+
+export type ProcessIncomingParams = {
+  botId: string;
+  platform: SupportedPlatform;
+  userId: string;
+  text: string;
+
+  // สำหรับ LINE/Telegram/Facebook ใช้กัน duplicate + log meta
+  displayName?: string;
+  platformMessageId?: string;
+  rawPayload?: unknown;
+};
+
+export type ProcessIncomingResult = {
+  reply: string;
+  intent: string;
+  isIssue: boolean;
+};
+
+// Bot + relations ที่ pipeline นี้ต้องใช้
+type BotWithRelations = NonNullable<
+  Awaited<ReturnType<typeof loadBotWithRelations>>
+>;
+
+// โหลด bot + secret + config + intents (และ preset ถ้าต้องใช้)
+async function loadBotWithRelations(botId: string) {
+  if (!botId) return null;
+
+  return prisma.bot.findUnique({
+    where: { id: botId },
+    include: {
+      secret: true,
+      config: {
+        include: {
+          preset: true,
+        },
+      },
+      intents: true,
+    },
+  });
+}
+
+function todayKey(): string {
+  // YYYY-MM-DD (ใช้เป็น key ของ StatDaily)
+  return new Date().toISOString().slice(0, 10);
+}
+
+function safeBroadcast(event: any) {
+  try {
+    // ตรงนี้อิงสัญญาเดิมว่า sseHub มีเมธอด broadcast(event)
+    (sseHub as any).broadcast?.(event);
+  } catch (err) {
+    console.warn("[inbound] SSE broadcast error", err);
+  }
+}
+
+export async function processIncomingMessage(
+  params: ProcessIncomingParams
+): Promise<ProcessIncomingResult> {
+  const {
+    botId,
+    platform,
+    userId,
+    text,
+    displayName,
+    platformMessageId,
+    rawPayload,
+  } = params;
+
+  // ถ้าข้อความว่าง ให้ตอบ fallback เลย (กันเคสส่งมาเป็น empty)
+  if (!text || !text.trim()) {
+    return {
+      reply: "ขออภัยค่ะ ระบบขัดข้องชั่วคราว ลองใหม่อีกครั้งภายหลังนะคะ",
+      intent: "other",
+      isIssue: false,
+    };
+  }
+
+  // ค่าตอบ fallback ถ้าพัง
+  const fallback: ProcessIncomingResult = {
+    reply: "ขออภัยค่ะ ระบบขัดข้องชั่วคราว ลองใหม่อีกครั้งภายหลังนะคะ",
+    intent: "other",
+    isIssue: false,
+  };
+
+  try {
+    const bot = await loadBotWithRelations(botId);
+
+    if (!bot) {
+      console.warn("[processIncomingMessage] bot not found:", { botId });
+      return fallback;
+    }
+    if (!bot.config) {
+      console.warn("[processIncomingMessage] bot config missing:", { botId });
+      return fallback;
+    }
+
+    const now = new Date();
+
+    // 1) หา/สร้าง ChatSession ก่อน
+    //    ใช้ unique constraint botId_userId
+    const session = await prisma.chatSession.upsert({
+      where: {
+        botId_userId: {
+          botId: bot.id,
+          userId,
+        },
+      },
+      update: {
+        lastMessageAt: now,
+        displayName: displayName ?? undefined,
+      },
+      create: {
+        tenant: bot.tenant,
+        botId: bot.id,
+        platform,
+        userId,
+        displayName: displayName ?? undefined,
+        lastMessageAt: now,
+      },
+    });
+
+    // 2) กัน duplicate message ด้วย platformMessageId
+    if (platformMessageId) {
+      const dup = await prisma.chatMessage.findFirst({
+        where: {
+          sessionId: session.id,
+          platformMessageId,
+        },
+        select: { id: true },
+      });
+
+      if (dup) {
+        console.log("[processIncomingMessage] duplicate message, skip", {
+          sessionId: session.id,
+          platformMessageId,
+        });
+
+        // ไม่ทำอะไรซ้ำ ไม่ตอบลูกค้าอีกรอบ
+        return {
+          reply: "",
+          intent: "duplicate",
+          isIssue: false,
+        };
+      }
+    }
+
+    // 3) บันทึกข้อความฝั่ง user → ChatMessage
+    const userChatMessage = await prisma.chatMessage.create({
+      data: {
+        tenant: bot.tenant,
+        botId: bot.id,
+        platform,
+        sessionId: session.id,
+        senderType: "user",
+        messageType: "text",
+        text,
+        platformMessageId: platformMessageId ?? null,
+        meta: {
+          source: platform,
+          rawPayload: rawPayload ?? null,
+        },
+      },
+      select: {
+        id: true,
+        createdAt: true,
+        text: true,
+      },
+    });
+
+    // broadcast SSE (ฝั่ง user)
+    safeBroadcast({
+      type: "chat:message:new",
+      tenant: bot.tenant,
+      botId: bot.id,
+      sessionId: session.id,
+      message: {
+        id: userChatMessage.id,
+        senderType: "user",
+        text: userChatMessage.text,
+        createdAt: userChatMessage.createdAt,
+      },
+    });
+
+    // 4) เตรียม client OpenAI ตาม secret/config ของบอท
+    let openai;
+    try {
+      openai = getOpenAIClientForBot(bot as BotWithRelations);
+    } catch (err) {
+      console.error(
+        "[processIncomingMessage] getOpenAIClientForBot error",
+        (err as any)?.message ?? err
+      );
+      // ถ้าไม่มี key หรือสร้าง client ไม่ได้ → ตอบ fallback เลย
+      return fallback;
+    }
+
+    // 5) เตรียม intents สำหรับส่งเข้า prompt
+    const intentsForPrompt =
+      bot.intents && bot.intents.length > 0
+        ? bot.intents
+            .map((it) => {
+              const keywords = Array.isArray(it.keywords)
+                ? (it.keywords as string[])
+                : [];
+
+              return `- code: ${it.code}
+  title: ${it.title}
+  keywords: ${keywords.join(", ")}`;
+            })
+            .join("\n")
+        : "ไม่พบ intent ใด ๆ ให้ตอบ intent = other";
+
+    const baseSystemPrompt =
+      bot.config.systemPrompt ||
+      "คุณคือแอดมินดูแลลูกค้า ให้ตอบแบบสุภาพ กระชับ และเป็นมนุษย์";
+
+    const classificationInstruction = `
+คุณมีหน้าที่:
+1) วิเคราะห์ข้อความลูกค้า
+2) เลือก intent หนึ่งตัวจากรายการด้านล่าง (ถ้าไม่เข้า ให้ใช้ "other")
+3) ตัดสินใจว่าเป็น "เคสปัญหา" จริงไหม (เช่น ฝากไม่เข้า, ถอนไม่ได้, ทำรายการไม่สำเร็จ ฯลฯ)
+4) สร้างข้อความตอบกลับลูกค้า
+
+แพลตฟอร์มที่ลูกค้าใช้งาน: ${platform}
+
+รายการ intent:
+${intentsForPrompt}
+
+ให้ตอบกลับในรูปแบบ JSON เท่านั้น ห้ามใส่ข้อความอื่นเพิ่ม
+โครงสร้าง JSON:
+
+{
+  "reply": "ข้อความที่ใช้ตอบลูกค้า",
+  "intent": "code ของ intent เช่น deposit, withdraw, register, kyc, other",
+  "isIssue": true หรือ false
+}
+`.trim();
+
+    const systemPrompt = `${baseSystemPrompt}\n\n${classificationInstruction}`;
+
+    const model = bot.config.model || "gpt-4o-mini";
+
+    // 6) เรียก OpenAI ให้จัด intent + บทตอบ
+    const completion = await openai.chat.completions.create({
+      model,
+      temperature: bot.config.temperature ?? 0.4,
+      top_p: bot.config.topP ?? 1,
+      max_tokens: bot.config.maxTokens ?? 800,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: text },
+      ],
+    });
+
+    let rawContent: any = completion.choices[0]?.message?.content ?? "{}";
+
+    // กรณี content เป็น array (รองรับ format บางแบบของ lib)
+    if (Array.isArray(rawContent)) {
+      rawContent = rawContent
+        .map((p: any) =>
+          typeof p === "string" ? p : p?.text ?? p?.content ?? ""
+        )
+        .join("");
+    }
+
+    let parsed: ProcessIncomingResult = {
+      reply: "ขอบคุณสำหรับข้อมูลค่ะ",
+      intent: "other",
+      isIssue: false,
+    };
+
+    try {
+      const json = JSON.parse(String(rawContent));
+
+      parsed = {
+        reply:
+          typeof json.reply === "string"
+            ? json.reply
+            : "ขอบคุณสำหรับข้อมูลค่ะ",
+        intent: typeof json.intent === "string" ? json.intent : "other",
+        isIssue: Boolean(json.isIssue),
+      };
+    } catch (err) {
+      console.error(
+        "[processIncomingMessage] JSON parse error from GPT",
+        err,
+        rawContent
+      );
+    }
+
+    const reply = parsed.reply || "ขอบคุณสำหรับข้อมูลค่ะ";
+    const intent = parsed.intent || "other";
+    const isIssue = Boolean(parsed.isIssue);
+
+    // 7) ถ้าเป็นเคสปัญหา → บันทึก CaseItem + StatDaily
+    let caseId: string | null = null;
+    const dateKey = todayKey();
+
+    if (isIssue) {
+      try {
+        const createdCase = await prisma.caseItem.create({
+          data: {
+            botId: bot.id,
+            tenant: bot.tenant,
+            platform,
+            sessionId: session.id,
+            userId,
+            kind: intent,
+            text,
+            meta: {
+              source: platform,
+              rawPayload: rawPayload ?? null,
+            },
+          },
+          select: {
+            id: true,
+            createdAt: true,
+            text: true,
+            kind: true,
+          },
+        });
+
+        caseId = createdCase.id;
+
+        await prisma.statDaily.upsert({
+          where: {
+            botId_dateKey: {
+              botId: bot.id,
+              dateKey,
+            },
+          },
+          update: {
+            total: { increment: 1 },
+            text: { increment: 1 },
+          },
+          create: {
+            botId: bot.id,
+            tenant: bot.tenant,
+            dateKey,
+            total: 1,
+            text: 1,
+            follow: 0,
+            unfollow: 0,
+          },
+        });
+
+        // SSE: case + stats
+        safeBroadcast({
+          type: "case:new",
+          tenant: bot.tenant,
+          botId: bot.id,
+          case: {
+            id: createdCase.id,
+            text: createdCase.text,
+            kind: createdCase.kind,
+            createdAt: createdCase.createdAt,
+            sessionId: session.id,
+          },
+        });
+
+        safeBroadcast({
+          type: "stats:update",
+          tenant: bot.tenant,
+          botId: bot.id,
+          dateKey,
+          delta: { total: 1, text: 1 },
+        });
+      } catch (err) {
+        console.error(
+          "[processIncomingMessage] error while creating case/stat",
+          (err as any)?.message ?? err
+        );
+      }
+    } else {
+      // non-issue แต่อาจอยากนับสถิติข้อความรวมด้วยก็ได้
+      try {
+        await prisma.statDaily.upsert({
+          where: {
+            botId_dateKey: {
+              botId: bot.id,
+              dateKey,
+            },
+          },
+          update: {
+            total: { increment: 1 },
+            text: { increment: 1 },
+          },
+          create: {
+            botId: bot.id,
+            tenant: bot.tenant,
+            dateKey,
+            total: 1,
+            text: 1,
+            follow: 0,
+            unfollow: 0,
+          },
+        });
+
+        safeBroadcast({
+          type: "stats:update",
+          tenant: bot.tenant,
+          botId: bot.id,
+          dateKey,
+          delta: { total: 1, text: 1 },
+        });
+      } catch (err) {
+        console.error(
+          "[processIncomingMessage] statDaily non-issue error",
+          (err as any)?.message ?? err
+        );
+      }
+    }
+
+    // 8) บันทึกข้อความฝั่ง bot + SSE
+    if (reply) {
+      try {
+        const botChatMessage = await prisma.chatMessage.create({
+          data: {
+            tenant: bot.tenant,
+            botId: bot.id,
+            platform,
+            sessionId: session.id,
+            senderType: "bot",
+            messageType: "text",
+            text: reply,
+            meta: {
+              source: platform,
+              via: "auto_reply",
+              intent,
+              isIssue,
+              caseId,
+            },
+          },
+          select: {
+            id: true,
+            text: true,
+            createdAt: true,
+          },
+        });
+
+        safeBroadcast({
+          type: "chat:message:new",
+          tenant: bot.tenant,
+          botId: bot.id,
+          sessionId: session.id,
+          message: {
+            id: botChatMessage.id,
+            senderType: "bot",
+            text: botChatMessage.text,
+            createdAt: botChatMessage.createdAt,
+          },
+        });
+      } catch (err) {
+        console.error(
+          "[processIncomingMessage] ingest bot message error",
+          (err as any)?.message ?? err
+        );
+      }
+    }
+
+    return { reply, intent, isIssue };
+  } catch (err) {
+    console.error(
+      "[processIncomingMessage] fatal error",
+      (err as any)?.message ?? err
+    );
+    // อย่าโยน error ออกไป ให้ส่ง fallback กลับ
+    return fallback;
+  }
+}

@@ -1,0 +1,299 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/**
+ * ====================== Admin & Core Bot Models ======================
+ */
+
+model AdminUser {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Bot {
+  id         String    @id @default(cuid())
+  tenant     String
+  name       String
+  platform   String    @default("line") // line / telegram / facebook / webchat ฯลฯ
+  active     Boolean   @default(true)
+  verifiedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  secret        BotSecret?
+  config        BotConfig?
+  cases         CaseItem[] // ✅ เคสทั้งหมดของบอทนี้
+  stats         StatDaily[]
+  knowledgeLink BotKnowledge[]
+  intents       BotIntent[] // ✅ relation ไปยัง Intent
+  chatSessions  ChatSession[]
+  chatMessages  ChatMessage[]
+
+  @@unique([tenant, name], name: "tenant_name")
+}
+
+/**
+ * ====================== Memory Layer ======================
+ */
+
+model MemoryItem {
+  id        String   @id @default(cuid())
+  tenant    String
+  userRef   String
+  key       String
+  value     String
+  ttlSec    Int?
+  tags      Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenant, userRef, key], name: "tenant_userRef_key")
+}
+
+/**
+ * ====================== Bot Secrets & Config ======================
+ */
+
+model BotSecret {
+  id    String @id @default(cuid())
+  botId String @unique
+
+  // LINE
+  channelSecret      String?
+  channelAccessToken String?
+
+  // ✅ Telegram
+  telegramBotToken String? // ใช้รับส่งกับ Telegram Bot API
+
+  // ✅ Facebook
+  facebookPageAccessToken String?
+  facebookVerifyToken     String?
+
+  // OpenAI
+  openaiApiKey String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bot Bot @relation(fields: [botId], references: [id], onDelete: Cascade)
+}
+
+model BotConfig {
+  id     String @id @default(cuid())
+  botId  String @unique
+  tenant String
+
+  // ค่า default สำหรับ AI config
+  model        String @default("gpt-4o-mini")
+  temperature  Float  @default(0.3)
+  topP         Float  @default(1)
+  maxTokens    Int    @default(800)
+  systemPrompt String @default("")
+
+  // ผูกกับ AiPreset (optional)
+  presetId  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bot    Bot       @relation(fields: [botId], references: [id], onDelete: Cascade)
+  preset AiPreset? @relation("AiPresetBotConfigs", fields: [presetId], references: [id])
+
+  @@index([tenant])
+}
+
+/**
+ * ====================== Cases & Daily Stats ======================
+ */
+
+model CaseItem {
+  id     String @id @default(cuid())
+  tenant String
+
+  bot   Bot    @relation(fields: [botId], references: [id])
+  botId String
+
+  platform String // "line" | "telegram" | ...
+
+  session   ChatSession? @relation(fields: [sessionId], references: [id])
+  sessionId String?
+
+  userId String
+  kind   String // "deposit" | "withdraw" | ...
+  text   String
+  meta   Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([botId, createdAt], map: "CaseItem_byBotDate")
+}
+
+model StatDaily {
+  id        String   @id @default(cuid())
+  botId     String
+  tenant    String
+  dateKey   String // YYYY-MM-DD
+  total     Int      @default(0)
+  text      Int      @default(0)
+  follow    Int      @default(0)
+  unfollow  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bot Bot @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  @@unique([botId, dateKey], name: "botId_dateKey")
+  @@index([tenant, dateKey])
+}
+
+/**
+ * ====================== AI Presets & Knowledge ======================
+ */
+
+model AiPreset {
+  id           String  @id @default(cuid())
+  tenant       String
+  name         String
+  description  String?
+  systemPrompt String?
+  model        String
+  temperature  Float?
+  topP         Float?
+  maxTokens    Int?
+
+  // สถานะ preset
+  status String @default("active")
+
+  // back-relation ไปยัง BotConfig (ใช้ชื่อ relation เดียวกับฝั่ง BotConfig)
+  botConfigs BotConfig[] @relation("AiPresetBotConfigs")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model KnowledgeDoc {
+  id        String   @id @default(cuid())
+  tenant    String
+  title     String
+  tags      String?
+  body      String
+  status    String   @default("active")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bots   BotKnowledge[]
+  chunks KnowledgeChunk[]
+}
+
+model KnowledgeChunk {
+  id        String   @id @default(cuid())
+  tenant    String
+  docId     String
+  content   String
+  embedding Json
+  tokens    Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  doc KnowledgeDoc @relation(fields: [docId], references: [id], onDelete: Cascade)
+
+  @@index([tenant])
+  @@index([docId])
+}
+
+model BotKnowledge {
+  botId     String
+  docId     String
+  createdAt DateTime @default(now())
+
+  bot Bot          @relation(fields: [botId], references: [id], onDelete: Cascade)
+  doc KnowledgeDoc @relation(fields: [docId], references: [id], onDelete: Cascade)
+
+  @@id([botId, docId])
+  @@unique([botId, docId], name: "botId_docId")
+}
+
+/**
+ * ====================== Bot Intent / Category ======================
+ */
+
+model BotIntent {
+  id        String   @id @default(cuid())
+  tenant    String
+  botId     String
+  code      String
+  title     String
+  keywords  Json?
+  fallback  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bot Bot @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  @@unique([botId, code], name: "botId_code")
+  @@index([tenant, botId])
+}
+
+/**
+ * ====================== Chat Center (Sessions & Messages) ======================
+ */
+
+model ChatSession {
+  id     String @id @default(cuid())
+  tenant String
+
+  bot   Bot    @relation(fields: [botId], references: [id])
+  botId String
+
+  platform String // "line" | "telegram" | ...
+  userId   String
+
+  userName    String?
+  displayName String?
+  userAvatar  String?
+
+  firstMessageAt DateTime?
+  lastMessageAt  DateTime?
+  lastText       String?
+  lastDirection  String? // "user" | "bot"
+
+  messages ChatMessage[]
+  cases    CaseItem[]
+
+  createdAt DateTime @default(now())
+
+  @@unique([botId, userId], map: "ChatSession_botId_userId_unique")
+  @@index([botId, platform, lastMessageAt], map: "ChatSession_list_index")
+}
+
+model ChatMessage {
+  id     String @id @default(cuid())
+  tenant String
+
+  bot   Bot    @relation(fields: [botId], references: [id])
+  botId String
+
+  platform String // "line" | "telegram" | ...
+
+  session   ChatSession @relation(fields: [sessionId], references: [id])
+  sessionId String
+
+  senderType        String // "user" | "bot" | "admin"
+  messageType       String // "text" | "image" | ...
+  text              String?
+  platformMessageId String? // id ของข้อความจาก platform
+  meta              Json?
+
+  createdAt DateTime @default(now())
+
+  @@unique([sessionId, platformMessageId], map: "ChatMessage_session_platformMsg_unique")
+  @@index([sessionId, createdAt], map: "ChatMessage_bySession")
+}

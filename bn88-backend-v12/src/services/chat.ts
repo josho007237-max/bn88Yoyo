@@ -1,0 +1,114 @@
+// src/services/chat.ts
+import { prisma } from "../lib/prisma";
+
+export type PlatformType = "line" | "telegram" | "facebook" | "web";
+
+type UpsertChatOptions = {
+  tenant: string;
+  botId: string;
+  platform: PlatformType | string;
+  userId: string;
+  displayName?: string | null;
+
+  userText?: string | null; // ข้อความฝั่งลูกค้า
+  botText?: string | null;  // ข้อความฝั่งบอทตอบกลับ
+  metaUser?: unknown;
+  metaBot?: unknown;
+};
+
+/**
+ * ใช้ใน webhook:
+ * - สร้าง/อัปเดต ChatSession
+ * - เพิ่ม ChatMessage ฝั่ง user / bot ตามที่ส่งมา
+ */
+export async function upsertChatSessionAndMessages(opts: UpsertChatOptions) {
+  const {
+    tenant,
+    botId,
+    platform,
+    userId,
+    displayName,
+    userText,
+    botText,
+    metaUser,
+    metaBot,
+  } = opts;
+
+  // 1) หา session เดิม
+  const existing = await prisma.chatSession.findFirst({
+    where: { tenant, botId, platform, userId },
+  });
+
+  let sessionId: string;
+
+  if (existing) {
+    // อัปเดต lastMessageAt + displayName ถ้ามี
+    const updated = await prisma.chatSession.update({
+      where: { id: existing.id },
+      data: {
+        lastMessageAt: new Date(),
+        ...(displayName ? { displayName } : {}),
+      },
+    });
+    sessionId = updated.id;
+  } else {
+    // ยังไม่มี → สร้างใหม่
+    const created = await prisma.chatSession.create({
+      data: {
+        tenant,
+        botId,
+        platform,
+        userId,
+        displayName: displayName || undefined,
+        lastMessageAt: new Date(),
+      },
+    });
+    sessionId = created.id;
+  }
+
+  const messagesData: {
+    tenant: string;
+    sessionId: string;
+    botId: string;
+    platform: string;
+    userId: string;
+    senderType: string;
+    messageType: string;
+    text: string;
+    meta?: any;
+  }[] = [];
+
+  if (userText && userText.trim()) {
+    messagesData.push({
+      tenant,
+      sessionId,
+      botId,
+      platform,
+      userId,
+      senderType: "user",
+      messageType: "text",
+      text: userText.trim(),
+      meta: metaUser ?? undefined,
+    });
+  }
+
+  if (botText && botText.trim()) {
+    messagesData.push({
+      tenant,
+      sessionId,
+      botId,
+      platform,
+      userId,
+      senderType: "bot",
+      messageType: "text",
+      text: botText.trim(),
+      meta: metaBot ?? undefined,
+    });
+  }
+
+  if (messagesData.length > 0) {
+    await prisma.chatMessage.createMany({ data: messagesData });
+  }
+
+  return { sessionId };
+}
