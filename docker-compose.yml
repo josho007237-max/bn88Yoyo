@@ -1,0 +1,32 @@
+version: "3.9"
+
+services:
+  backend:
+    build: ./bn88-backend-v12
+    env_file: ./bn88-backend-v12/.env
+    ports:
+      - "4000:4000"
+    depends_on:
+      - db
+
+  frontend:
+    build: ./bn88-frontend-dashboard-v12
+    env_file: ./bn88-frontend-dashboard-v12/.env
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-bn88}
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+volumes:
+  db_data:
