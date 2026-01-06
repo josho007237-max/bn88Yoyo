@@ -38,3 +38,4 @@ export function mapTelegramUpdateToInbound(args: {
     channelId: chat ? String(chat.id) : undefined,
   };
 }
+

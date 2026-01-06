@@ -1,8 +1,10 @@
-export function connectLive(base: string, tenant: string, onEvent:(t:string,d:any)=>void){
-  const es = new EventSource(`${base}/api/live/${tenant}`);
-  es.onopen = () => onEvent("live:open", { t: Date.now() });
-  es.onerror = () => onEvent("live:error", { t: Date.now() });
-  es.addEventListener("hb", e => onEvent("hb", JSON.parse((e as MessageEvent).data)));
-  es.addEventListener("case:new", e => onEvent("case:new", JSON.parse((e as MessageEvent).data)));
-  return es;
+import { useEffect } from "react";
+import connectEvents from "../lib/events";
+
+export default function useLive(tenant: string, handlers?: any) {
+  useEffect(() => {
+    if (!tenant) return;
+    const disconnect = connectEvents({ tenant, ...(handlers || {}) });
+    return () => disconnect();
+  }, [tenant, handlers]);
 }

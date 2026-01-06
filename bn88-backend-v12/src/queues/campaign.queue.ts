@@ -23,13 +23,19 @@ function getQueue() {
 }
 
 export async function upsertCampaignScheduleJob(
-  job: CampaignScheduleJob & { cron: string; timezone: string; startAt?: Date; endAt?: Date; idempotencyKey?: string },
+  job: CampaignScheduleJob & {
+    cron: string;
+    timezone: string;
+    startAt?: Date;
+    endAt?: Date;
+    idempotencyKey?: string;
+  }
 ) {
   const q = getQueue();
   const log = createRequestLogger(job.requestId);
 
   const repeat: JobsOptions["repeat"] = {
-    cron: job.cron,
+    pattern: job.cron,
     tz: job.timezone,
   };
 
@@ -38,14 +44,26 @@ export async function upsertCampaignScheduleJob(
 
   const jobId = job.idempotencyKey || job.scheduleId;
 
-  await q.add("campaign.schedule", { scheduleId: job.scheduleId, campaignId: job.campaignId, requestId: job.requestId }, {
-    jobId,
-    repeat,
-    removeOnComplete: true,
-    removeOnFail: true,
-  });
+  await q.add(
+    "campaign.schedule",
+    {
+      scheduleId: job.scheduleId,
+      campaignId: job.campaignId,
+      requestId: job.requestId,
+    },
+    {
+      jobId,
+      repeat,
+      removeOnComplete: true,
+      removeOnFail: true,
+    }
+  );
 
-  log.info("[campaign.schedule] registered", { scheduleId: job.scheduleId, campaignId: job.campaignId, jobId });
+  log.info("[campaign.schedule] registered", {
+    scheduleId: job.scheduleId,
+    campaignId: job.campaignId,
+    jobId,
+  });
   return jobId;
 }
 
@@ -67,16 +85,21 @@ export function startCampaignScheduleWorker() {
     queueName,
     async (job) => {
       const log = createRequestLogger(job.data.requestId || job.id);
-      log.info("[campaign.schedule] firing", { scheduleId: job.data.scheduleId, campaignId: job.data.campaignId });
+      log.info("[campaign.schedule] firing", {
+        scheduleId: job.data.scheduleId,
+        campaignId: job.data.campaignId,
+      });
       try {
         await queueCampaign(job.data.campaignId);
-        log.info("[campaign.schedule] queued campaign", { campaignId: job.data.campaignId });
+        log.info("[campaign.schedule] queued campaign", {
+          campaignId: job.data.campaignId,
+        });
       } catch (err) {
         log.error("[campaign.schedule] queue failed", err);
         throw err;
       }
     },
-    { connection },
+    { connection }
   );
 
   worker.on("failed", (job, err) => {
@@ -84,3 +107,4 @@ export function startCampaignScheduleWorker() {
     log.error("[campaign.schedule] worker failed", err);
   });
 }
+

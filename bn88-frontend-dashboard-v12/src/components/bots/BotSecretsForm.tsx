@@ -203,4 +203,3 @@ export default function BotSecretsForm({ botId, onSaved }: Props) {
     </div>
   );
 }
-ุ

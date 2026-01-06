@@ -1,24 +1,41 @@
-import { Router } from "express";
+// src/routes/events.ts
+import { Router, type Request, type Response } from "express";
+import { getRequestId, createRequestLogger } from "../utils/logger";
 import { sseHub } from "../lib/sseHub";
-import { randomUUID } from "crypto";
 
-export const events = Router();
+const router = Router();
+const TENANT_DEFAULT = process.env.TENANT_DEFAULT || "bn9";
 
-events.get("/events", (req, res) => {
-  const tenant = String(req.query.tenant || process.env.TENANT_DEFAULT || "bn9");
-  const id = randomUUID();
+// GET /api/events?tenant=bn9
+router.get("/", (req: Request, res: Response) => {
+  const requestId = getRequestId(req);
+  const log = createRequestLogger(requestId);
 
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache, no-transform"); // no transform สำคัญบน CF
-  res.setHeader("Connection", "keep-alive");
-  res.flushHeaders?.();
+  try {
+    const tenantHeader = req.headers["x-tenant"] as string | undefined;
+    const tenantQuery = req.query.tenant as string | undefined;
+    const tenant = tenantHeader || tenantQuery || TENANT_DEFAULT;
 
-  sseHub.addClient(tenant, id, res);
+    // SSE headers
+    res.status(200);
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
 
-  req.on("close", () => {
-    sseHub.removeClient(tenant, id);
-    try { res.end(); } catch {}
-  });
+    res.write("retry: 10000\n\n");
+    (res as any).flushHeaders?.();
+
+    log.info("[SSE] client connected", { tenant, requestId });
+
+    sseHub.addClient(tenant, res);
+
+    // ห้าม res.end
+  } catch (err) {
+    console.error("[SSE] error while handling /api/events", err);
+    if (!res.headersSent) res.status(500).json({ ok: false, message: "sse_error" });
+  }
 });
 
+export default router;
 

@@ -9,7 +9,12 @@ process.on("uncaughtException", (err) =>
 import dotenv from "dotenv";
 dotenv.config();
 
-import express, { type Request, type Response, type NextFunction } from "express";
+import express, {
+  type Request,
+  type Response,
+  type NextFunction,
+} from "express";
+import * as path from "node:path";
 import cors from "cors";
 import morgan from "morgan";
 import helmet from "helmet";
@@ -22,8 +27,10 @@ import { logger } from "./mw/logger";
 import { authGuard } from "./mw/auth";
 import { sseHandler } from "./live";
 import { metricsSseHandler, metricsStreamHandler } from "./routes/metrics.live";
+
 import { startEngagementScheduler } from "./services/engagementScheduler";
-import { events } from "./routes/events";
+import { startCampaignScheduleWorker } from "./queues/campaign.queue";
+import { startMessageWorker } from "./queues/message.queue";
 
 /* Core routes */
 import health from "./routes/health";
@@ -32,6 +39,10 @@ import casesRoutes from "./routes/cases";
 import statsRoutes from "./routes/stats";
 import botsRoutes from "./routes/bots";
 import botsSummary from "./routes/bots.summary";
+import devRoutes from "./routes/dev";
+import lineTools from "./routes/tools/line";
+import aiAnswerRoute from "./routes/ai/answer";
+import events from "./routes/events";
 
 /* Webhooks */
 import lineWebhookRouter from "./routes/webhooks/line";
@@ -39,6 +50,7 @@ import telegramWebhookRouter from "./routes/webhooks/telegram";
 import facebookWebhookRouter from "./routes/webhooks/facebook";
 
 /* Admin */
+import adminAuthRoutes from "./routes/admin/auth";
 import adminBotsRouter from "./routes/admin/bots";
 import adminBotIntentsRouter from "./routes/admin/botIntents";
 import adminRouter from "./routes/admin";
@@ -50,43 +62,46 @@ import lepAdminRouter from "./routes/admin/lep";
 import { telegramLiveAdminRouter } from "./routes/admin/telegramLive";
 import adminRolesRouter from "./routes/admin/roles";
 import botAutomationRouter from "./routes/admin/botAutomation";
-import { startCampaignScheduleWorker } from "./queues/campaign.queue";
-import { startMessageWorker } from "./queues/message.queue";
-
-/* Dev & tools */
-import devRoutes from "./routes/dev";
-import lineTools from "./routes/tools/line";
-import aiAnswerRoute from "./routes/ai/answer";
+import adminFaqRouter from "./routes/admin/faq";
+import adminUploadsRouter from "./routes/admin/uploads";
 
 const app = express();
 app.set("trust proxy", 1);
 
+/* Workers */
 startCampaignScheduleWorker();
 startMessageWorker();
 
-/* ---------- Body parsers ---------- */
+/* simple probes */
+app.get("/", (_req, res) => res.send("ok"));
+app.get("/health", (_req, res) => res.redirect("/api/health"));
 
-// LINE ต้องใช้ raw body เพื่อ verify signature
+/* ✅ Serve uploads (ครั้งเดียวพอ) */
+app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
+app.use("/api/uploads", express.static(path.join(process.cwd(), "uploads")));
+
+/* ---------- Body parsers ---------- */
+/**
+ * ✅ LINE ต้องใช้ raw body เพื่อ verify signature
+ * ต้องอยู่ก่อน express.json()
+ */
 app.use("/api/webhooks/line", express.raw({ type: "application/json" }));
 
-// parsers ทั่วไป
+/* parsers ทั่วไป */
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: false, limit: "200kb" }));
 
-app.use(
-  (err: any, _req: Request, res: Response, next: NextFunction) => {
-    if (err?.type === "entity.too.large") {
-      return res.status(413).json({ ok: false, message: "payload_too_large" });
-    }
-    if (err?.type === "entity.parse.failed") {
-      return res.status(400).json({ ok: false, message: "invalid_json" });
-    }
-    return next(err);
+app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
+  if (err?.type === "entity.too.large") {
+    return res.status(413).json({ ok: false, message: "payload_too_large" });
   }
-);
+  if (err?.type === "entity.parse.failed") {
+    return res.status(400).json({ ok: false, message: "invalid_json" });
+  }
+  return next(err);
+});
 
 /* Security / CORS / Log */
-
 const allowList = new Set(
   (config.ALLOWED_ORIGINS || "")
     .split(",")
@@ -117,7 +132,6 @@ app.use(morgan("dev"));
 app.use(logger);
 
 /* Compression (skip SSE) */
-
 app.use(
   compression({
     filter: (req, res) => {
@@ -127,8 +141,7 @@ app.use(
   })
 );
 
-/* Rate limit */
-
+/* Rate limit (mounted on /api) */
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 300,
@@ -141,13 +154,10 @@ const limiter = rateLimit({
     req.path.startsWith("/events") ||
     req.path.startsWith("/admin/chat"),
 });
-
 app.use("/api", limiter);
 
 /* Health */
-
 app.use("/api/health", health);
-
 app.get("/api/health", (_req, res) =>
   res.json({
     ok: true,
@@ -157,13 +167,11 @@ app.get("/api/health", (_req, res) =>
 );
 
 /* Dev & tools */
-
 app.use("/api", devRoutes);
 app.use("/api", lineTools);
 app.use("/api", events);
 
 /* Core */
-
 app.use("/api/auth", authRoutes);
 app.use("/api/bots", botsRoutes);
 app.use("/api/bots", botsSummary);
@@ -172,7 +180,6 @@ app.use("/api/stats", statsRoutes);
 app.use("/api/ai/answer", aiAnswerRoute);
 
 /* Realtime */
-
 app.get("/api/live/:tenant", sseHandler);
 app.get("/api/live/metrics", metricsSseHandler);
 app.get("/metrics/stream", metricsStreamHandler);
@@ -182,16 +189,21 @@ startEngagementScheduler().catch((err) =>
 );
 
 /* Webhooks */
-
 app.use("/api/webhooks/line", lineWebhookRouter);
 app.use("/api/webhooks/facebook", facebookWebhookRouter);
 app.use("/api/webhooks/telegram", telegramWebhookRouter);
 
 /* Admin */
+app.use("/api/admin/uploads", adminUploadsRouter);
 
 if (config.ENABLE_ADMIN_API === "1") {
   console.log("[BOOT] Admin API enabled (guarded by JWT)");
 
+  // ✅ public
+  app.use("/api/admin/auth", adminAuthRoutes);
+
+  // ✅ guarded
+  app.use("/api/admin/faq", authGuard, adminFaqRouter);
   app.use("/api/admin/bots", authGuard, adminBotsRouter);
   app.use("/api/admin/bots", authGuard, adminBotIntentsRouter);
   app.use("/api/admin/chat", authGuard, chatAdminRouter);
@@ -200,32 +212,31 @@ if (config.ENABLE_ADMIN_API === "1") {
   app.use("/api/admin/roles", authGuard, adminRolesRouter);
   app.use("/api/admin/bot", authGuard, botAutomationRouter);
 
-  app.use("/api/admin", authGuard, adminRouter);
   app.use("/api/admin/ai/presets", authGuard, presetsAdmin);
   app.use("/api/admin/ai/knowledge", authGuard, knowledgeAdmin);
   app.use("/api/admin/ai/personas", authGuard, adminPersonaRoutes);
+
+  // ✅ mount adminRouter ครั้งเดียว
+  app.use("/api/admin", authGuard, adminRouter);
 }
 
 /* 404 & Errors */
-
 app.use("/api", (_req: Request, res: Response) => {
   res.status(404).json({ ok: false, message: "not_found" });
 });
 
-app.use(
-  (err: any, _req: Request, res: Response, _next: NextFunction) => {
-    if (err instanceof ZodError) {
-      return res
-        .status(400)
-        .json({ ok: false, message: "invalid_input", issues: err.issues });
-    }
-    if (err?.type === "entity.parse.failed" || err instanceof SyntaxError) {
-      return res.status(400).json({ ok: false, message: "invalid_json" });
-    }
-    console.error("[INTERNAL ERROR]", err);
-    return res.status(500).json({ ok: false, message: "internal_error" });
+app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+  if (err instanceof ZodError) {
+    return res
+      .status(400)
+      .json({ ok: false, message: "invalid_input", issues: err.issues });
   }
-);
+  if (err?.type === "entity.parse.failed" || err instanceof SyntaxError) {
+    return res.status(400).json({ ok: false, message: "invalid_json" });
+  }
+  console.error("[INTERNAL ERROR]", err);
+  return res.status(500).json({ ok: false, message: "internal_error" });
+});
 
 const PORT = Number(config.PORT ?? process.env.PORT ?? 3000);
 app.listen(PORT, "0.0.0.0", () => {
@@ -233,3 +244,4 @@ app.listen(PORT, "0.0.0.0", () => {
 });
 
 export default app;
+

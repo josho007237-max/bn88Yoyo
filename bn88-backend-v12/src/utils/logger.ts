@@ -17,3 +17,4 @@ export function createRequestLogger(requestId?: string) {
     error: (...args: unknown[]) => console.error(prefix, ...args),
   };
 }
+

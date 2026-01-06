@@ -20,7 +20,11 @@ import { config } from "../../config";
 
 const router = Router();
 
-const buildSuccess = (result: { lepBaseUrl: string; status: number; data: any }) => ({
+const buildSuccess = (result: {
+  lepBaseUrl: string;
+  status: number;
+  data: any;
+}) => ({
   ok: true,
   source: "lep",
   lepBaseUrl: result.lepBaseUrl,
@@ -42,31 +46,16 @@ const mapSchedule = (s: any) => ({
 });
 
 const handleLepError = (err: any, res: any) => {
-  const message = err instanceof LepClientError ? err.message : "lep_error";
-  return res
-    .status(502)
-    .json({ ok: false, message: "lep_error", detail: message, lepBaseUrl: err?.lepBaseUrl });
+  const detail = err instanceof LepClientError ? err.message : "lep_error";
+  return res.status(502).json({
+    ok: false,
+    message: "lep_error",
+    detail,
+    lepBaseUrl: err?.lepBaseUrl ?? config.LEP_BASE_URL,
+  });
 };
 
-router.get("/health", async (_req, res) => {
-  try {
-    const result = await getLepHealth();
-    return res.json(buildSuccess(result));
-  } catch (err: any) {
-    return handleLepError(err, res);
-  }
-});
-
-router.get("/campaigns", async (req, res) => {
-  try {
-    const page = req.query.page ? Number(req.query.page) : undefined;
-    const pageSize = req.query.pageSize ? Number(req.query.pageSize) : undefined;
-    const result = await listCampaigns({ page, pageSize });
-    return res.json(buildSuccess(result));
-  } catch (err: any) {
-    return handleLepError(err, res);
-  }
-});
+/* ------------------------------ schemas ------------------------------ */
 
 const createCampaignSchema = z.object({
   name: z.string().min(1),
@@ -82,14 +71,56 @@ const scheduleSchema = z.object({
   idempotencyKey: z.string().optional(),
 });
 
+/* ------------------------------ routes ------------------------------ */
+
+router.get("/health", async (_req, res) => {
+  try {
+    const result = await getLepHealth();
+    return res.json(buildSuccess(result));
+  } catch (err: any) {
+    return handleLepError(err, res);
+  }
+});
+
+router.get("/campaigns", async (req, res) => {
+  try {
+    const page = req.query.page ? Number(req.query.page) : undefined;
+    const pageSize = req.query.pageSize
+      ? Number(req.query.pageSize)
+      : undefined;
+
+    const result = await listCampaigns({ page, pageSize });
+    return res.json(buildSuccess(result));
+  } catch (err: any) {
+    return handleLepError(err, res);
+  }
+});
+
 router.post("/campaigns", async (req, res) => {
   const parsed = createCampaignSchema.safeParse(req.body);
   if (!parsed.success) {
-    return res.status(400).json({ ok: false, message: "invalid_input", issues: parsed.error.issues });
+    return res.status(400).json({
+      ok: false,
+      message: "invalid_input",
+      issues: parsed.error.issues,
+    });
+  }
+
+  const name = parsed.data.name.trim();
+  const message = parsed.data.message.trim();
+
+  if (!name || !message) {
+    return res
+      .status(400)
+      .json({ ok: false, message: "name & message required" });
   }
 
   try {
-    const result = await createCampaign(parsed.data);
+    const result = await createCampaign({
+      name,
+      message,
+      targets: parsed.data.targets,
+    });
     return res.json(buildSuccess(result));
   } catch (err: any) {
     return handleLepError(err, res);
@@ -127,12 +158,13 @@ router.get("/campaigns/:id/schedules", async (req, res) => {
   try {
     const schedules = await listSchedules(req.params.id);
     const mapped = schedules.map(mapSchedule);
+
     return res.json(
       buildSuccess({
         lepBaseUrl: config.LEP_BASE_URL,
         status: 200,
         data: { campaignId: req.params.id, schedules: mapped },
-      }),
+      })
     );
   } catch (err: any) {
     return handleLepError(err, res);
@@ -142,14 +174,34 @@ router.get("/campaigns/:id/schedules", async (req, res) => {
 router.post("/campaigns/:id/schedules", async (req, res) => {
   const parsed = scheduleSchema.safeParse(req.body);
   if (!parsed.success) {
-    return res.status(400).json({ ok: false, message: "invalid_input", issues: parsed.error.issues });
+    return res
+      .status(400)
+      .json({
+        ok: false,
+        message: "invalid_input",
+        issues: parsed.error.issues,
+      });
   }
 
   try {
     const requestId = getRequestId(req);
-    const schedule = await createSchedule(req.params.id, { ...parsed.data, requestId });
+    const { cron, timezone, startAt, endAt, idempotencyKey } = parsed.data;
+
+    const schedule = await createSchedule(req.params.id, {
+      cron,
+      timezone,
+      startAt,
+      endAt,
+      idempotencyKey,
+      requestId,
+    });
+
     return res.json(
-      buildSuccess({ lepBaseUrl: config.LEP_BASE_URL, status: 200, data: { schedule: mapSchedule(schedule), campaignId: req.params.id } })
+      buildSuccess({
+        lepBaseUrl: config.LEP_BASE_URL,
+        status: 200,
+        data: { schedule: mapSchedule(schedule), campaignId: req.params.id },
+      })
     );
   } catch (err: any) {
     return handleLepError(err, res);
@@ -159,14 +211,28 @@ router.post("/campaigns/:id/schedules", async (req, res) => {
 router.patch("/campaigns/:id/schedules/:scheduleId", async (req, res) => {
   const parsed = scheduleSchema.partial().safeParse(req.body);
   if (!parsed.success) {
-    return res.status(400).json({ ok: false, message: "invalid_input", issues: parsed.error.issues });
+    return res.status(400).json({
+      ok: false,
+      message: "invalid_input",
+      issues: parsed.error.issues,
+    });
   }
 
   try {
     const requestId = getRequestId(req);
-    const schedule = await updateSchedule(req.params.id, req.params.scheduleId, parsed.data, requestId);
+    const schedule = await updateSchedule(
+      req.params.id,
+      req.params.scheduleId,
+      parsed.data,
+      requestId
+    );
+
     return res.json(
-      buildSuccess({ lepBaseUrl: config.LEP_BASE_URL, status: 200, data: { schedule: mapSchedule(schedule), campaignId: req.params.id } })
+      buildSuccess({
+        lepBaseUrl: config.LEP_BASE_URL,
+        status: 200,
+        data: { schedule: mapSchedule(schedule), campaignId: req.params.id },
+      })
     );
   } catch (err: any) {
     return handleLepError(err, res);
@@ -177,8 +243,13 @@ router.delete("/campaigns/:id/schedules/:scheduleId", async (req, res) => {
   try {
     const requestId = getRequestId(req);
     await deleteSchedule(req.params.id, req.params.scheduleId, requestId);
+
     return res.json(
-      buildSuccess({ lepBaseUrl: config.LEP_BASE_URL, status: 200, data: { scheduleId: req.params.scheduleId } })
+      buildSuccess({
+        lepBaseUrl: config.LEP_BASE_URL,
+        status: 200,
+        data: { scheduleId: req.params.scheduleId },
+      })
     );
   } catch (err: any) {
     return handleLepError(err, res);
@@ -186,3 +257,4 @@ router.delete("/campaigns/:id/schedules/:scheduleId", async (req, res) => {
 });
 
 export default router;
+

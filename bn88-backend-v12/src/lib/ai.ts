@@ -64,3 +64,4 @@ export async function embedTexts(
   // SDK คืน embedding เป็น number[]
   return resp.data.map((d: any) => d.embedding as number[]);
 }
+

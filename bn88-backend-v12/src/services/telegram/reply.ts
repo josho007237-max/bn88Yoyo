@@ -19,3 +19,4 @@ export async function sendTelegramMessage(args: {
   // เช่น POST ไปที่ https://api.telegram.org/bot<TOKEN>/sendMessage
   // โดยใช้ bot.secret.telegramBotToken
 }
+

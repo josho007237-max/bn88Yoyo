@@ -184,3 +184,4 @@ r.delete("/:botId/intents/:id", async (req: Request, res: Response) => {
 });
 
 export default r;
+

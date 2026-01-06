@@ -1,0 +1,11 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.router = void 0;
+const express_1 = require("express");
+const campaign_controller_1 = require("../controllers/campaign.controller");
+exports.router = (0, express_1.Router)();
+exports.router.get('/audience', campaign_controller_1.listAudience);
+exports.router.post('/schedule', campaign_controller_1.scheduleCampaign);
+exports.router.post('/queue', campaign_controller_1.enqueueCampaign);
+exports.router.get('/login/start', campaign_controller_1.loginStart);
+exports.router.get('/login/callback', campaign_controller_1.loginCallback);

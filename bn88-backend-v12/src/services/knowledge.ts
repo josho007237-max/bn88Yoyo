@@ -135,3 +135,4 @@ export async function searchRelevant(
   scored.sort((a, b) => b.score - a.score);
   return scored.slice(0, limit);
 }
+

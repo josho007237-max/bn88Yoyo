@@ -1,39 +1,4 @@
-version: "3.8"
-
 services:
-  app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: line-engagement-app:latest
-    env_file:
-      - .env
-    environment:
-      - NODE_ENV=production
-    ports:
-      - "8080:8080"
-    depends_on:
-      - postgres
-      - redis
-    networks:
-      - backend
-
-  worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: line-engagement-worker:latest
-    env_file:
-      - .env
-    environment:
-      - NODE_ENV=production
-    command: ["node", "dist/workers/worker.js"]
-    depends_on:
-      - postgres
-      - redis
-    networks:
-      - backend
-
   postgres:
     image: postgres:15-alpine
     restart: unless-stopped
@@ -41,17 +6,16 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: line_platform
-    volumes:
-      - pgdata:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
       timeout: 5s
-      retries: 5
-    networks:
-      - backend
+      retries: 10
+    networks: [backend]
 
   redis:
     image: redis:7-alpine
@@ -60,8 +24,38 @@ services:
       - "6379:6379"
     volumes:
       - redisdata:/data
-    networks:
-      - backend
+    networks: [backend]
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: line-engagement-app:latest
+    env_file: [.env]
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks: [backend]
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: line-engagement-worker:latest
+    env_file: [.env]
+    command: ["node","--experimental-specifier-resolution=node","dist/workers/worker.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks: [backend]
 
 volumes:
   pgdata:

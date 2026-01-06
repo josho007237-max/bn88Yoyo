@@ -11,16 +11,6 @@ datasource db {
  * ====================== Admin & Core Bot Models ======================
  */
 
-model AdminUser {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  password  String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  roles AdminUserRole[]
-}
-
 model Role {
   id          String   @id @default(cuid())
   name        String   @unique
@@ -42,12 +32,23 @@ model Permission {
   roles RolePermission[]
 }
 
+model AdminUser {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // relation หลายต่อหลาย ผ่านตารางกลาง AdminUserRole
+  roles AdminUserRole[]
+}
+
 model AdminUserRole {
-  adminId String
-  roleId  String
-  admin   AdminUser @relation(fields: [adminId], references: [id], onDelete: Cascade)
-  role    Role      @relation(fields: [roleId], references: [id], onDelete: Cascade)
-  assignedAt DateTime @default(now())
+  adminId    String
+  roleId     String
+  admin      AdminUser @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  role       Role      @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  assignedAt DateTime  @default(now())
 
   @@id([adminId, roleId])
 }
@@ -72,19 +73,114 @@ model Bot {
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
-  secret        BotSecret?
-  config        BotConfig?
-  cases         CaseItem[] // ✅ เคสทั้งหมดของบอทนี้
-  stats         StatDaily[]
-  knowledgeLink BotKnowledge[]
-  intents       BotIntent[] // ✅ relation ไปยัง Intent
-  chatSessions  ChatSession[]
-  chatMessages  ChatMessage[]
-  conversations Conversation[]
+  secret             BotSecret?
+  config             BotConfig?
+  cases              CaseItem[] // ✅ เคสทั้งหมดของบอทนี้
+  stats              StatDaily[]
+  knowledgeLink      BotKnowledge[]
+  intents            BotIntent[] // ✅ relation ไปยัง Intent
+  chatSessions       ChatSession[]
+  chatMessages       ChatMessage[]
+  conversations      Conversation[]
   faqs               FAQ[]
   engagementMessages EngagementMessage[]
+  faqEntries         FaqEntry[]
+  dailyRules         DailyRule[]
+  codePools          CodePool[]
+  imageIntakes       ImageIntake[]
 
   @@unique([tenant, name], name: "tenant_name")
+}
+
+model DailyRule {
+  id         String @id @default(cuid())
+  tenant     String
+  botId      String
+  platform   String
+  channelKey String @default("default") // ถ้าไม่มี channel/group ให้ใช้ "default"
+  dateKey    String // "YYYY-MM-DD"
+
+  conditions    Json
+  passReply     String
+  failReply     String
+  reviewReply   String
+  needInfoReply String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bot       Bot        @relation(fields: [botId], references: [id], onDelete: Cascade)
+  codePools CodePool[]
+
+  @@unique([tenant, botId, platform, channelKey, dateKey], map: "daily_rule_unique")
+  @@index([tenant, botId, dateKey])
+}
+
+model CodePool {
+  id     String     @id @default(cuid())
+  tenant String
+  botId  String
+  ruleId String? // ผูกกับ DailyRule (ถ้าต้องการแยกโค้ดตามกิจกรรม)
+  code   String
+  status CodeStatus @default(AVAILABLE)
+
+  expiresAt DateTime?
+  usedAt    DateTime?
+  usedBy    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bot             Bot              @relation(fields: [botId], references: [id], onDelete: Cascade)
+  rule            DailyRule?       @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  codeRedemptions CodeRedemption[]
+
+  @@unique([tenant, botId, code], name: "code_unique_per_bot")
+  @@index([tenant, botId, status])
+}
+
+model ImageIntake {
+  id         String @id @default(cuid())
+  tenant     String
+  botId      String
+  platform   String
+  channelKey String @default("default")
+
+  userId        String
+  sessionId     String? // ผูก ChatSession ได้ถ้ามี
+  chatMessageId String? // ผูก ChatMessage ได้ถ้ามี
+
+  imageUrl       String
+  classification ImageClass
+  confidence     Float?
+  rawJson        Json?
+
+  createdAt DateTime @default(now())
+
+  bot     Bot          @relation(fields: [botId], references: [id], onDelete: Cascade)
+  session ChatSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  message ChatMessage? @relation(fields: [chatMessageId], references: [id], onDelete: SetNull)
+
+  cases CaseItem[]
+
+  @@index([tenant, botId, createdAt])
+  @@index([tenant, userId, createdAt])
+}
+
+model CodeRedemption {
+  id         String   @id @default(cuid())
+  tenant     String
+  userId     String
+  botId      String
+  ruleId     String
+  codePoolId String
+  dateKey    String // "YYYY-MM-DD"
+  redeemedAt DateTime @default(now())
+
+  codePool CodePool @relation(fields: [codePoolId], references: [id], onDelete: Cascade)
+
+  @@unique([tenant, botId, userId, ruleId, dateKey], name: "one_redeem_per_rule_per_day")
+  @@index([tenant, botId, redeemedAt])
 }
 
 /**
@@ -145,6 +241,9 @@ model BotConfig {
   maxTokens    Int    @default(800)
   systemPrompt String @default("")
 
+  // สวิตช์เปิด/ปิดการใช้ OpenAI
+  aiEnabled Boolean @default(true)
+
   // ผูกกับ AiPreset (optional)
   presetId  String?
   createdAt DateTime @default(now())
@@ -164,22 +263,32 @@ model CaseItem {
   id     String @id @default(cuid())
   tenant String
 
-  bot   Bot    @relation(fields: [botId], references: [id])
   botId String
+  bot   Bot    @relation(fields: [botId], references: [id], onDelete: Cascade)
 
-  platform String // "line" | "telegram" | ...
-
-  session   ChatSession? @relation(fields: [sessionId], references: [id])
+  platform  String // หรือ Platform ถ้ามี enum
   sessionId String?
+  session   ChatSession? @relation(fields: [sessionId], references: [id])
 
   userId String
-  kind   String // "deposit" | "withdraw" | ...
+  kind   String // "deposit" | "withdraw" | "activity" | ...
   text   String
   meta   Json?
 
+  status      CaseStatus @default(PENDING)
+  reviewNotes String?
+  resolvedAt  DateTime?
+  resolvedBy  String?
+
+  imageIntakeId String?
+  imageIntake   ImageIntake? @relation(fields: [imageIntakeId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now())
+updatedAt DateTime @default(now()) @updatedAt
 
   @@index([botId, createdAt], map: "CaseItem_byBotDate")
+  @@index([tenant, status, createdAt], map: "CaseItem_byTenantStatusDate")
+  @@index([tenant, botId, status], map: "CaseItem_byTenantBotStatus")
 }
 
 model StatDaily {
@@ -247,7 +356,7 @@ model KnowledgeChunk {
   embedding Json
   tokens    Int      @default(0)
   createdAt DateTime @default(now())
-  updatedAt DateTime @default(now())
+updatedAt DateTime @default(now()) @updatedAt
 
   doc KnowledgeDoc @relation(fields: [docId], references: [id], onDelete: Cascade)
 
@@ -298,38 +407,48 @@ model ChatSession {
 
   bot   Bot    @relation(fields: [botId], references: [id])
   botId String
-
-  platform String // "line" | "telegram" | ...
+  platform String
   userId   String
 
   userName    String?
   displayName String?
   userAvatar  String?
-
+  meta Json?
   firstMessageAt DateTime?
   lastMessageAt  DateTime?
   lastText       String?
   lastDirection  String? // "user" | "bot"
 
+  // ====== META สำหรับ Chat Center ======
+  status     String  @default("open") // "open" | "pending" | "closed"
+  tags       String? // เก็บเป็น comma-separated เช่น "ฝากไม่เข้า, VIP"
+  caseCount  Int     @default(0) // นับเคสที่ผูกกับห้องนี้
+  hasProblem Boolean @default(false) // มีเคสปัญหาหรือไม่
+  unread     Int     @default(0) // จำนวนข้อความที่ยังไม่อ่าน (optional)
+  // =====================================
+
   messages ChatMessage[]
   cases    CaseItem[]
 
-  createdAt DateTime @default(now())
+  createdAt    DateTime      @default(now())
+  imageIntakes ImageIntake[]
 
   @@unique([botId, userId], map: "ChatSession_botId_userId_unique")
   @@index([botId, platform, lastMessageAt], map: "ChatSession_list_index")
+  @@index([status])
+  @@index([hasProblem])
 }
 
 model Conversation {
-  id        String @id @default(uuid())
+  id        String        @id @default(uuid())
   tenant    String
-  bot       Bot    @relation(fields: [botId], references: [id])
+  bot       Bot           @relation(fields: [botId], references: [id])
   botId     String
   userId    String
   platform  String
   messages  ChatMessage[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
 
   @@unique([botId, userId], map: "Conversation_botId_userId_unique")
   @@index([botId, createdAt], map: "Conversation_bot_createdAt")
@@ -358,7 +477,8 @@ model ChatMessage {
   platformMessageId String? // id ของข้อความจาก platform
   meta              Json?
 
-  createdAt DateTime @default(now())
+  createdAt    DateTime      @default(now())
+  imageIntakes ImageIntake[]
 
   @@unique([sessionId, platformMessageId], map: "ChatMessage_session_platformMsg_unique")
   @@index([sessionId, createdAt], map: "ChatMessage_bySession")
@@ -366,13 +486,13 @@ model ChatMessage {
 }
 
 model LiveStream {
-  id          String       @id @default(uuid())
+  id          String         @id @default(uuid())
   channelId   String
   title       String
   description String?
-  status      String       @default("live")
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  status      String         @default("live")
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
   questions   LiveQuestion[]
   polls       LivePoll[]
 }
@@ -411,19 +531,36 @@ model FAQ {
   @@index([botId], map: "FAQ_botId")
 }
 
+model FaqEntry {
+  id     String @id @default(cuid())
+  tenant String
+
+  botId String
+  bot   Bot    @relation(fields: [botId], references: [id])
+
+  question String // คำถาม
+  answer   String // คำตอบ
+  keywords String // เก็บเป็น string เดียวก่อน เช่น "ฝากไม่เข้า, เงินไม่เข้า"
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenant, botId])
+}
+
 model EngagementMessage {
-  id         String   @id @default(uuid())
+  id         String    @id @default(uuid())
   botId      String
-  platform   String   @default("line")
+  platform   String    @default("line")
   channelId  String
   text       String
   interval   Int
-  enabled    Boolean  @default(true)
-  type       String   @default("text")
+  enabled    Boolean   @default(true)
+  type       String    @default("text")
   meta       Json?
   lastSentAt DateTime?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   bot Bot @relation(fields: [botId], references: [id])
 
@@ -441,25 +578,94 @@ enum MessageType {
 }
 
 model CampaignSchedule {
-  id             String   @id @default(cuid())
+  id             String                 @id @default(cuid())
   campaignId     String
   cronExpr       String
   timezone       String
   status         CampaignScheduleStatus @default(ACTIVE)
   startAt        DateTime?
   endAt          DateTime?
-  idempotencyKey String? @unique
+  idempotencyKey String?                @unique
   lastRunAt      DateTime?
   nextRunAt      DateTime?
   meta           Json?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  @@index([campaignId], map: "CampaignSchedule_campaignId")
+}
+
+model CampaignTask {
+  id              String   @id @default(cuid())
+  tenant          String
+  botId           String
+  code            String // เช่น "PROMO_DEC_STEP1"
+  title           String // ชื่อกิจกรรม
+  description     String // อธิบาย
+  instructions    String // ข้อความบรีฟให้ AI ใช้ตรวจ
+  exampleImageUrl String? // รูปตัวอย่างว่าถูกต้อง
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([tenant, botId, code])
+}
+
+model ImageSample {
+  id     String @id @default(cuid())
+  tenant String
+  botId  String
+  label  String
+  ahash  String
+  note      String?
+  filePath  String?
+  mime      String?
+  size      Int?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenant, botId, label])
+  @@index([tenant, botId, ahash])
+}
+
+model CampaignUserProgress {
+  id             String   @id @default(cuid())
+  tenant         String
+  botId          String
+  userId         String // line userId
+  taskCode       String // อ้าง CampaignTask.code
+  step           Int // ขั้นตอนที่ถึงแล้ว
+  isCompleted    Boolean  @default(false)
+  lastImageUrl   String?
+  lastResultJson Json?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  @@index([campaignId], map: "CampaignSchedule_campaignId")
+  @@index([tenant, botId, userId, taskCode])
 }
 
 enum CampaignScheduleStatus {
   ACTIVE
   PAUSED
   DISABLED
+}
+
+enum CodeStatus {
+  AVAILABLE
+  USED
+  EXPIRED
+}
+
+enum ImageClass {
+  SLIP
+  ACTIVITY
+  OTHER
+}
+
+enum CaseStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  NEED_MORE_INFO
 }

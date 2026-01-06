@@ -16,8 +16,8 @@ type IntentForm = {
   id?: string | null;
   code: string;
   title: string;
-  keywords: string; // แสดง/แก้ไขเป็น comma-separated
-  fallback: string;
+  keywords: string; // comma-separated
+  fallback: string; // UI เก็บเป็น string เสมอ
 };
 
 const EMPTY_FORM: IntentForm = {
@@ -39,7 +39,8 @@ const BotIntentsPanel: React.FC<Props> = ({ botId }) => {
 
   useEffect(() => {
     if (!botId) return;
-    load();
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [botId]);
 
   async function load() {
@@ -65,7 +66,7 @@ const BotIntentsPanel: React.FC<Props> = ({ botId }) => {
       code: it.code,
       title: it.title,
       keywords: (it.keywords || []).join(", "),
-      fallback: it.fallback || "",
+      fallback: (it.fallback ?? "").toString(),
     });
   }
 
@@ -75,6 +76,7 @@ const BotIntentsPanel: React.FC<Props> = ({ botId }) => {
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+
     if (!form.code.trim()) {
       alert("กรุณากรอก code ของ intent");
       return;
@@ -84,14 +86,24 @@ const BotIntentsPanel: React.FC<Props> = ({ botId }) => {
       return;
     }
 
-    const payload = {
+    const keywords = form.keywords
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    const fallbackText = form.fallback.trim();
+
+    // ✅ สำคัญ: ห้ามส่ง null (TS บอกชัดว่า fallback รับ string | undefined)
+    const payload: {
+      code: string;
+      title: string;
+      keywords?: string[];
+      fallback?: string;
+    } = {
       code: form.code.trim(),
       title: form.title.trim(),
-      keywords: form.keywords
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean),
-      fallback: form.fallback.trim() || null,
+      keywords,
+      ...(fallbackText ? { fallback: fallbackText } : {}), // ✅ ไม่ส่งคีย์ถ้าว่าง
     };
 
     try {
@@ -99,14 +111,11 @@ const BotIntentsPanel: React.FC<Props> = ({ botId }) => {
       let saved: BotIntent;
 
       if (form.id) {
-        // update
         saved = await updateBotIntent(botId, form.id, payload);
       } else {
-        // create
         saved = await createBotIntent(botId, payload);
       }
 
-      // อัปเดตรายการใน state
       setItems((prev) => {
         const idx = prev.findIndex((x) => x.id === saved.id);
         if (idx === -1) return [saved, ...prev];
@@ -163,7 +172,6 @@ const BotIntentsPanel: React.FC<Props> = ({ botId }) => {
         </button>
       </div>
 
-      {/* Suggested codes */}
       <div className="flex flex-wrap gap-2 text-xs text-neutral-300">
         <span className="text-neutral-500">ตัวอย่าง code:</span>
         {SUGGESTED_CODES.map((c) => (
@@ -178,7 +186,6 @@ const BotIntentsPanel: React.FC<Props> = ({ botId }) => {
         ))}
       </div>
 
-      {/* Table */}
       <div className="border border-neutral-800 rounded-xl overflow-hidden">
         <table className="w-full text-xs">
           <thead className="bg-black/30 text-neutral-400">
@@ -193,40 +200,25 @@ const BotIntentsPanel: React.FC<Props> = ({ botId }) => {
           <tbody>
             {loading && (
               <tr>
-                <td
-                  colSpan={5}
-                  className="px-3 py-3 text-center text-neutral-500"
-                >
+                <td colSpan={5} className="px-3 py-3 text-center text-neutral-500">
                   Loading…
                 </td>
               </tr>
             )}
             {!loading && items.length === 0 && (
               <tr>
-                <td
-                  colSpan={5}
-                  className="px-3 py-3 text-center text-neutral-500"
-                >
+                <td colSpan={5} className="px-3 py-3 text-center text-neutral-500">
                   ยังไม่มี intents สำหรับบอทนี้
                 </td>
               </tr>
             )}
             {!loading &&
               items.map((it) => (
-                <tr
-                  key={it.id}
-                  className="border-t border-neutral-800 hover:bg-white/5"
-                >
-                  <td className="px-3 py-2 font-mono text-[11px]">
-                    {it.code}
-                  </td>
+                <tr key={it.id} className="border-t border-neutral-800 hover:bg-white/5">
+                  <td className="px-3 py-2 font-mono text-[11px]">{it.code}</td>
                   <td className="px-3 py-2">{it.title}</td>
-                  <td className="px-3 py-2 text-neutral-300">
-                    {(it.keywords || []).join(", ")}
-                  </td>
-                  <td className="px-3 py-2 text-neutral-300">
-                    {it.fallback || "-"}
-                  </td>
+                  <td className="px-3 py-2 text-neutral-300">{(it.keywords || []).join(", ")}</td>
+                  <td className="px-3 py-2 text-neutral-300">{it.fallback || "-"}</td>
                   <td className="px-3 py-2 text-right">
                     <div className="inline-flex gap-2">
                       <button
@@ -238,7 +230,7 @@ const BotIntentsPanel: React.FC<Props> = ({ botId }) => {
                       </button>
                       <button
                         type="button"
-                        onClick={() => onDelete(it.id)}
+                        onClick={() => void onDelete(it.id)}
                         disabled={deletingId === it.id}
                         className="px-2 py-1 rounded-lg bg-red-700 hover:bg-red-600 text-[11px] disabled:opacity-60"
                       >
@@ -252,11 +244,8 @@ const BotIntentsPanel: React.FC<Props> = ({ botId }) => {
         </table>
       </div>
 
-      {/* Form */}
       <form onSubmit={onSubmit} className="space-y-3 pt-2 border-t border-neutral-800">
-        <div className="text-xs text-neutral-400">
-          {form.id ? "แก้ไข Intent ที่เลือก" : "เพิ่ม Intent ใหม่"}
-        </div>
+        <div className="text-xs text-neutral-400">{form.id ? "แก้ไข Intent ที่เลือก" : "เพิ่ม Intent ใหม่"}</div>
 
         <div className="grid md:grid-cols-3 gap-3">
           <Field label="Code (เช่น deposit / withdraw / register / kyc / other)">
@@ -313,11 +302,7 @@ const BotIntentsPanel: React.FC<Props> = ({ botId }) => {
             disabled={saving}
             className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-sm disabled:opacity-60"
           >
-            {saving
-              ? "กำลังบันทึก…"
-              : form.id
-              ? "Save changes"
-              : "Add Intent"}
+            {saving ? "กำลังบันทึก…" : form.id ? "Save changes" : "Add Intent"}
           </button>
         </div>
       </form>
@@ -325,13 +310,7 @@ const BotIntentsPanel: React.FC<Props> = ({ botId }) => {
   );
 };
 
-function Field({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="flex flex-col gap-1">
       <span className="text-xs text-neutral-300">{label}</span>

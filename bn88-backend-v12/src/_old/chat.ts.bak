@@ -1,0 +1,44 @@
+import { Router } from "express";
+import { prisma } from "../lib/prisma"; // ปรับ path ให้ตรงโปรเจคพี่
+
+export const adminChatRouter = Router();
+
+// GET /api/admin/chat/messages?sessionId=...&limit=...
+adminChatRouter.get("/messages", async (req, res) => {
+  const sessionId = String(req.query.sessionId || "");
+  const limit = Number(req.query.limit || 200);
+
+  // ถ้าระบบพี่ใช้ multi-tenant จริง ต้องดึง tenant จาก header นี้
+  const tenant = String(req.headers["x-tenant"] || "");
+
+  if (!sessionId) {
+    return res.status(400).json({ ok: false, error: "missing sessionId" });
+  }
+
+  const items = await prisma.chatMessage.findMany({
+    where: tenant ? { tenant, sessionId } : { sessionId },
+    orderBy: { createdAt: "asc" },
+    take: limit,
+    select: {
+      id: true,
+      sessionId: true,
+      conversationId: true,
+
+      // ✅ เพิ่ม “ตัวบอกคนส่ง”
+      senderType: true,
+      from: true,
+      role: true,
+      direction: true,
+
+      type: true,
+      text: true,
+      attachmentUrl: true,
+      attachmentMeta: true,
+      platformMessageId: true,
+      meta: true,
+      createdAt: true,
+    },
+  });
+
+  return res.json({ ok: true, items });
+});

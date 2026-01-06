@@ -1,24 +1,9 @@
-version: "3.9"
-
 services:
-  backend:
-    build: ./bn88-backend-v12
-    env_file: ./bn88-backend-v12/.env
-    ports:
-      - "4000:4000"
-    depends_on:
-      - db
-
-  frontend:
-    build: ./bn88-frontend-dashboard-v12
-    env_file: ./bn88-frontend-dashboard-v12/.env
-    ports:
-      - "3000:3000"
-    depends_on:
-      - backend
-
+  # -----------------------------
+  # Core DB (ของ bn88-backend-v12)
+  # -----------------------------
   db:
-    image: postgres:15
+    image: postgres:15-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-admin}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
@@ -27,6 +12,128 @@ services:
       - "5432:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin} -d ${POSTGRES_DB:-bn88}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # -----------------------------
+  # LEP DB (แยกออกมา กันชนกันกับ core)
+  # -----------------------------
+  lep_db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: ${LEP_POSTGRES_USER:-lep}
+      POSTGRES_PASSWORD: ${LEP_POSTGRES_PASSWORD:-lep_password}
+      POSTGRES_DB: ${LEP_POSTGRES_DB:-line_platform}
+    # ไม่จำเป็นต้องเปิดพอร์ตออกนอกเครื่อง
+    volumes:
+      - lep_db_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${LEP_POSTGRES_USER:-lep} -d ${LEP_POSTGRES_DB:-line_platform}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # -----------------------------
+  # Redis (ใช้ร่วมกัน)
+  # -----------------------------
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  # -----------------------------
+  # Core Backend
+  # -----------------------------
+  backend:
+    build:
+      context: ./bn88-backend-v12
+      dockerfile: Dockerfile
+    env_file:
+      - ./bn88-backend-v12/.env
+    ports:
+      - "3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # -----------------------------
+  # Admin Dashboard (Frontend)
+  # -----------------------------
+  frontend:
+    build:
+      context: ./bn88-frontend-dashboard-v12
+      dockerfile: Dockerfile
+    env_file:
+      - ./bn88-frontend-dashboard-v12/.env
+    ports:
+      - "5555:5555"
+    depends_on:
+      backend:
+        condition: service_started
+    restart: unless-stopped
+
+  # -----------------------------
+  # LEP (DEV mode) — ทำให้ 8080 ขึ้นก่อน แม้ TS build ไม่ผ่าน
+  # -----------------------------
+  lep:
+    image: node:18-alpine
+    working_dir: /usr/src/app
+    volumes:
+      - ./line-engagement-platform:/usr/src/app
+    environment:
+      NODE_ENV: development
+      PORT: "8080"
+      BASE_URL: http://localhost:8080
+      REDIS_URL: redis://redis:6379
+
+      # ใช้ Postgres แยกของ LEP
+      DATABASE_URL: postgresql://${LEP_POSTGRES_USER:-lep}:${LEP_POSTGRES_PASSWORD:-lep_password}@lep_db:5432/${LEP_POSTGRES_DB:-line_platform}?schema=public
+
+      # ค่าที่เหลือ (ใส่จริงทีหลัง)
+      BULL_BOARD_USER: admin
+      BULL_BOARD_PASS: change_me_strong
+      LINE_CHANNEL_ACCESS_TOKEN: YOUR_LINE_CHANNEL_ACCESS_TOKEN
+      LINE_CHANNEL_SECRET: YOUR_LINE_CHANNEL_SECRET
+      LINE_LOGIN_CHANNEL_ID: YOUR_LOGIN_CHANNEL_ID
+      LINE_LOGIN_CHANNEL_SECRET: YOUR_LOGIN_CHANNEL_SECRET
+      LINE_LOGIN_REDIRECT_URI: http://localhost:8080/campaign/login/callback
+      LIFF_APP_ID: YOUR_LIFF_ID
+      LINE_PAY_BASE: https://sandbox-api-pay.line.me
+      LINE_PAY_CHANNEL_ID: YOUR_PAY_CHANNEL_ID
+      LINE_PAY_CHANNEL_SECRET: YOUR_PAY_CHANNEL_SECRET
+      LINE_PAY_CONFIRM_URL: http://localhost:8080/payments/confirm
+      ADS_ACCESS_TOKEN: YOUR_ADS_API_TOKEN
+    ports:
+      - "8080:8080"
+    depends_on:
+      lep_db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "
+        npm ci &&
+        npx prisma generate &&
+        npx prisma db push &&
+        node -r ts-node/register/transpile-only src/server.ts
+      "
+    restart: unless-stopped
 
 volumes:
   db_data:
+  lep_db_data:

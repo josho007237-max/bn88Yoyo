@@ -6,6 +6,7 @@ import {
   RouterProvider,
   Navigate,
   useLocation,
+  Route,
 } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
 
@@ -17,41 +18,32 @@ import Login from "./pages/Login";
 import ChatCenter from "./pages/ChatCenter";
 import Knowledge from "./pages/Knowledge";
 import MarketingLep from "./pages/MarketingLep";
+
+import Rules from "./pages/Rules";
+import DailyRuleStock from "./pages/DailyRuleStock";
+
 import "./index.css";
 
-// ใช้ key เดียวกับ lib/api.ts
-const TOKEN_KEY = "bn9_jwt";
+import { getToken } from "./lib/api"; // ✅ ใช้ตัวเดียวกันทั้งระบบ
+import ImageSamplesPage from "./pages/ImageSamples";
 
-/* ------------------------ helpers ------------------------ */
+// ใน <Routes> ... </Routes>
+<Route path="/image-samples" element={<ImageSamplesPage />} />;
 
 function hasToken() {
-  try {
-    return !!localStorage.getItem(TOKEN_KEY);
-  } catch {
-    return false;
-  }
+  return !!getToken();
 }
 
-// ย้าย scrollTo(0,0) ไว้ตรงนี้ (ไม่เกี่ยวกับ loop)
 function ScrollTop() {
   const { pathname } = useLocation();
-  React.useEffect(() => {
-    window.scrollTo(0, 0);
-  }, [pathname]);
+  React.useEffect(() => window.scrollTo(0, 0), [pathname]);
   return null;
 }
 
-// ครอบเฉพาะ “หน้า private”
 function RequireAuth({ children }: { children: JSX.Element }) {
   const location = useLocation();
   if (!hasToken()) {
-    return (
-      <Navigate
-        to="/login"
-        replace
-        state={{ from: location }}
-      />
-    );
+    return <Navigate to="/login" replace state={{ from: location }} />;
   }
   return children;
 }
@@ -70,17 +62,8 @@ function RouteError() {
   );
 }
 
-/* ------------------------ router ------------------------ */
-
 const router = createBrowserRouter([
-  // public: /login (ไม่ครอบ RequireAuth)
-  {
-    path: "/login",
-    element: <Login />,
-    errorElement: <RouteError />,
-  },
-
-  // shell + protected pages
+  { path: "/login", element: <Login />, errorElement: <RouteError /> },
   {
     path: "/",
     element: (
@@ -147,6 +130,25 @@ const router = createBrowserRouter([
           </RequireAuth>
         ),
       },
+
+      // ✅ เพิ่ม 2 route นี้
+      {
+        path: "rules",
+        element: (
+          <RequireAuth>
+            <Rules />
+          </RequireAuth>
+        ),
+      },
+      {
+        path: "rules/:ruleId",
+        element: (
+          <RequireAuth>
+            <DailyRuleStock />
+          </RequireAuth>
+        ),
+      },
+
       { path: "*", element: <Navigate to="/" replace /> },
     ],
   },

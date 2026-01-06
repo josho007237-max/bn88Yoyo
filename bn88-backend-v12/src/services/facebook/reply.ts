@@ -19,3 +19,4 @@ export async function sendFacebookReply(args: {
   // - ใช้ bot.secret.facebookPageAccessToken
   // - POST ไป /me/messages พร้อม recipient.id = toUserId
 }
+

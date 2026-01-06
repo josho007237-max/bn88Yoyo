@@ -8,3 +8,4 @@ export type IngestRawEvent =
   | { platform: "line"; event: LineRawEvent }
   | { platform: "telegram"; event: TelegramRawEvent }
   | { platform: "facebook"; event: FacebookRawEvent };
+

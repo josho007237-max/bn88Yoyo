@@ -3,7 +3,7 @@ import axios from "axios";
 
 /**
  * HTTP client สำหรับให้ backend เรียก API อื่น (ถ้าจำเป็น)
- * ตอนนี้ใช้ ADMIN_API_BASE จาก environment ถ้าไม่ตั้งจะเป็น "" (ไม่ถูกใช้ก็ได้)
+ * ใช้ ADMIN_API_BASE จาก environment
  */
 export const API: any = axios.create({
   baseURL: process.env.ADMIN_API_BASE || "",
@@ -30,8 +30,7 @@ export type BotAiConfigResponse = {
 /* ======================= Helper functions ======================= */
 
 /**
- * (ตัวอย่าง) ดึง Bot AI Config ผ่าน HTTP
- * ปกติโปรเจกต์เราไปอ่านจาก Prisma โดยตรงอยู่แล้ว
+ * ดึง Bot AI Config ผ่าน HTTP
  */
 export async function getBotConfig(
   botId: string
@@ -43,7 +42,7 @@ export async function getBotConfig(
 }
 
 /**
- * (ตัวอย่าง) อัปเดต Bot AI Config ผ่าน HTTP
+ * อัปเดต Bot AI Config ผ่าน HTTP
  */
 export async function updateBotConfig(
   botId: string,
@@ -55,3 +54,4 @@ export async function updateBotConfig(
   );
   return res.data as BotAiConfigResponse;
 }
+

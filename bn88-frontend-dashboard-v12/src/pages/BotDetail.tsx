@@ -1,15 +1,11 @@
 // src/pages/BotDetail.tsx
-import {
-  useEffect,
-  useMemo,
-  useState,
-  useCallback,
-} from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import BotIntentsPanel from "../components/BotIntentsPanel";
+import connectEvents from "../lib/events";
 import {
-  getApiBase,
+  api, // ✅ ใช้ api.base แทน getApiBase()
   getBot,
   getBotSecrets,
   updateBotSecrets,
@@ -19,7 +15,6 @@ import {
   type BotItem,
   type BotAiConfig,
 } from "../lib/api";
-import { connectEvents } from "../lib/events";
 
 type SecretsForm = {
   openaiApiKey: string;
@@ -33,15 +28,12 @@ const EMPTY: SecretsForm = {
   lineChannelSecret: "",
 };
 
-const TENANT = import.meta.env.VITE_TENANT ?? "bn9";
+// ✅ tenant อ่านได้ทั้ง 2 แบบให้ตรงกับ env ที่คุณใช้
+const TENANT =
+  import.meta.env.VITE_DEFAULT_TENANT ?? import.meta.env.VITE_TENANT ?? "bn9";
 
 // โมเดลที่อนุญาต (กำหนดฝั่ง frontend เลย)
-const ALLOWED_MODELS = [
-  "gpt-4o-mini",
-  "gpt-4o",
-  "o4-mini",
-  "gpt-3.5-turbo",
-];
+const ALLOWED_MODELS = ["gpt-4o-mini", "gpt-4o", "o4-mini", "gpt-3.5-turbo"];
 
 export default function BotDetail() {
   const { botId = "" } = useParams();
@@ -59,7 +51,8 @@ export default function BotDetail() {
   const [allowedModels, setAllowedModels] = useState<string[]>(ALLOWED_MODELS);
   const [savingAi, setSavingAi] = useState(false);
 
-  const apiBase = getApiBase();
+  // ✅ ใช้ base จาก api.ts (ซึ่งคำนวณจาก env ให้แล้ว)
+  const apiBase = api.base;
 
   const title = useMemo(() => bot?.name || "Bot", [bot]);
 
@@ -68,13 +61,9 @@ export default function BotDetail() {
     if (!botId || !bot) return "";
     switch (bot.platform) {
       case "telegram":
-        return `${apiBase}/webhooks/telegram?botId=${encodeURIComponent(
-          botId
-        )}`;
+        return `${apiBase}/webhooks/telegram?botId=${encodeURIComponent(botId)}`;
       case "facebook":
-        return `${apiBase}/webhooks/facebook?botId=${encodeURIComponent(
-          botId
-        )}`;
+        return `${apiBase}/webhooks/facebook?botId=${encodeURIComponent(botId)}`;
       case "line":
       default:
         return `${apiBase}/webhooks/line?botId=${encodeURIComponent(botId)}`;
@@ -135,7 +124,7 @@ export default function BotDetail() {
     // เตรียม AI config
     const defaults: BotAiConfig = {
       botId: bot.id,
-      model: cfgRes.allowedModels[0] || "gpt-4o-mini",
+      model: cfgRes.allowedModels?.[0] || "gpt-4o-mini",
       systemPrompt: "",
       temperature: 0.3,
       topP: 1,
@@ -209,17 +198,20 @@ export default function BotDetail() {
     if (!botId) return;
     try {
       setSaving(true);
+
       // ส่งเฉพาะช่องที่มีค่า (กันทับด้วยค่าว่าง/******)
       const payload: Partial<SecretsForm> = {};
       (Object.keys(form) as (keyof SecretsForm)[]).forEach((k) => {
         const val = (form[k] || "").trim();
-        if (val) (payload as any)[k] = val;
+        if (!val) return;
+        (payload as any)[k] = val;
       });
 
-      const res = await updateBotSecrets(botId, payload);
+      const res = await updateBotSecrets(botId, payload as any);
       if (!res?.ok) throw new Error("save_failed");
+
       toast.success("บันทึก Secrets แล้ว");
-      await loadBot(); // รีเฟรชค่า (รวม verifiedAt หากครบ)
+      await loadBot(); // รีเฟรชค่า
     } catch (err) {
       console.error("onSave secrets error:", err);
       toast.error((err as any)?.message || "บันทึกไม่สำเร็จ ❌");
@@ -230,11 +222,12 @@ export default function BotDetail() {
 
   async function onPingLine() {
     if (!botId) return;
-    // ปุ่มนี้ยังใช้เทสเฉพาะ LINE
+
     if (bot?.platform !== "line") {
       alert("ปุ่ม Test: LINE ping ใช้ได้เฉพาะบอท LINE");
       return;
     }
+
     try {
       setPinging(true);
       const r = await devLinePing(botId);
@@ -264,13 +257,14 @@ export default function BotDetail() {
     try {
       setSavingAi(true);
       const res = await updateBotConfig(botId, aiConfig);
-      const cfg = res.config ?? aiConfig;
+
       setAllowedModels(
         Array.isArray(res.allowedModels) && res.allowedModels.length
           ? res.allowedModels
           : ALLOWED_MODELS
       );
-      setAiConfig(cfg);
+      setAiConfig(res.config ?? aiConfig);
+
       alert("บันทึก AI Config แล้ว ✔");
     } catch (err) {
       console.error("onSaveAiConfig error:", err);
@@ -285,7 +279,6 @@ export default function BotDetail() {
 
   if (!bot) return null;
 
-  const isLine = bot.platform === "line";
   const isTelegram = bot.platform === "telegram";
   const isFacebook = bot.platform === "facebook";
 
@@ -327,6 +320,7 @@ export default function BotDetail() {
               )}
             </div>
           </div>
+
           <div className="flex gap-2">
             <button
               onClick={onPingLine}
@@ -335,6 +329,7 @@ export default function BotDetail() {
             >
               {pinging ? "Pinging…" : "Test: LINE ping"}
             </button>
+
             <button
               onClick={onSave}
               disabled={saving}
@@ -350,6 +345,7 @@ export default function BotDetail() {
           <div className="text-sm text-gray-300 mb-2">
             {platformLabel} Webhook URL
           </div>
+
           {webhookUrl ? (
             <>
               <div className="flex items-center gap-2">
@@ -364,7 +360,8 @@ export default function BotDetail() {
                 </button>
               </div>
               <div className="mt-2 text-xs text-gray-500">
-                นำ URL นี้ไปวางในฝั่ง {platformLabel} แล้วกด Verify / ตั้งค่า Webhook
+                นำ URL นี้ไปวางในฝั่ง {platformLabel} แล้วกด Verify / ตั้งค่า
+                Webhook
               </div>
             </>
           ) : (
@@ -398,15 +395,14 @@ export default function BotDetail() {
                 spellCheck={false}
               />
             </Field>
+
             <Field label={secretLabel}>
               <input
                 type="password"
                 className="w-full px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700 outline-none focus:ring-2 focus:ring-white/10 text-sm"
                 placeholder="ใส่ค่าใหม่ หรือ ****** เพื่อคงค่าเดิม"
                 value={form.lineChannelSecret}
-                onChange={(e) =>
-                  onChange("lineChannelSecret", e.target.value)
-                }
+                onChange={(e) => onChange("lineChannelSecret", e.target.value)}
                 spellCheck={false}
               />
             </Field>
@@ -417,8 +413,8 @@ export default function BotDetail() {
         {(isTelegram || isFacebook) && (
           <div className="text-xs text-amber-300 bg-amber-950/30 border border-amber-900 rounded-xl p-3">
             ตอนนี้ส่วนเชื่อมต่อ {platformLabel} ยังเป็นโครงเบื้องต้น
-            ใช้สำหรับเก็บ Token / Secret ล่วงหน้าได้ก่อน
-            ขั้นต่อไปเราค่อยเพิ่ม Webhook route ฝั่ง backend สำหรับ {platformLabel} โดยเฉพาะ
+            ใช้สำหรับเก็บ Token / Secret ล่วงหน้าได้ก่อน ขั้นต่อไปเราค่อยเพิ่ม
+            Webhook route ฝั่ง backend สำหรับ {platformLabel} โดยเฉพาะ
           </div>
         )}
 
@@ -429,8 +425,7 @@ export default function BotDetail() {
               AI Config / Persona ของบอท
             </div>
             <div className="text-xs text-neutral-400">
-              ตั้งค่าโมเดล, อุณหภูมิ (temperature), และ system prompt
-              เพื่อกำหนดบุคลิกและหน้าที่ของ AI สำหรับบอทตัวนี้
+              ตั้งค่าโมเดล, temperature, และ system prompt
             </div>
 
             <div className="grid md:grid-cols-3 gap-3">
@@ -505,7 +500,7 @@ export default function BotDetail() {
               <textarea
                 rows={6}
                 className="w-full px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700 outline-none focus:ring-2 focus:ring-white/10 text-sm"
-                placeholder="เขียนคำสั่งบอก AI ว่าบอทตัวนี้เป็นใคร ทำหน้าที่อะไร มีข้อห้ามอะไรบ้าง..."
+                placeholder="เขียนคำสั่งบอก AI ว่าบอทตัวนี้เป็นใคร ทำหน้าที่อะไร..."
                 value={aiConfig.systemPrompt}
                 onChange={(e) =>
                   setAiConfig((s) =>

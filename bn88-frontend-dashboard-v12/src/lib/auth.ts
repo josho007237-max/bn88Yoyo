@@ -1,4 +1,4 @@
-const TOKEN_KEY = "bn9_token";
+const TOKEN_KEY = "bn9.admin.token";
 
 export function getToken(): string {
   return localStorage.getItem(TOKEN_KEY) || "";

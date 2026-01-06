@@ -1,0 +1,29 @@
+{
+  "name": "bn88-backend-v12",
+  "version": "12.0.0",
+  "main": "dist/server.js",
+  "license": "MIT",
+  "scripts": {
+    "check:all": "pwsh -ExecutionPolicy Bypass -File ./src/scripts/dev-check.ps1",
+    "check:line": "pwsh -ExecutionPolicy Bypass -File ./src/scripts/dev-check-line.ps1",
+    "dev:check:chat": "tsx src/scripts/dev-check-chat.ts",
+    "check:extended": "pwsh -ExecutionPolicy Bypass -File ./src/scripts/dev-check-extended.ps1",
+    "seed": "tsx src/scripts/seed.ts",
+    "seed:admin": "tsx src/scripts/seedAdmin.ts",
+    "seed:bot": "tsx src/scripts/seedBot.ts",
+    "seed:dev": "tsx src/scripts/seedDev.ts",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:reset": "prisma migrate reset --force",
+    "prisma:studio": "prisma studio",
+    "migrate:deploy": "prisma migrate deploy",
+    "dev": "tsx watch src/server.ts",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "eslint": "^9.39.2",
+    "prettier": "^3.7.4",
+    "typescript-eslint": "^8.50.1"
+  }
+}

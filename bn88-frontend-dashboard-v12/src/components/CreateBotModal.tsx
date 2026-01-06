@@ -76,7 +76,7 @@ export default function CreateBotModal({
     try {
       setSaving(true);
       // 1) สร้างบอทเปล่า
-      const { bot } = await initBot();
+      const bot = await initBot();
       const botId = (bot as any)?.id as string;
 
       // 2) ตั้งชื่อ (optional) — reuse API meta patch ผ่าน /bots/:id (รองรับในฝั่ง backend แล้ว)

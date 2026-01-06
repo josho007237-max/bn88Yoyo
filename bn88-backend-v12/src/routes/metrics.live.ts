@@ -85,3 +85,4 @@ export function metricsSseHandler(req: Request, res: Response) {
 
 // Backwards-compatible alias for the new /metrics/stream endpoint
 export const metricsStreamHandler = metricsSseHandler;
+

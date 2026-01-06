@@ -1,6 +1,13 @@
-// src/components/RequireAuth.tsx (ย่อ)
-import { Navigate, Outlet } from "react-router-dom";
+import { Navigate, Outlet, useLocation } from "react-router-dom";
+import { getToken } from "../lib/api";
+
 export default function RequireAuth() {
-  const token = typeof localStorage !== "undefined" ? localStorage.getItem("BN9_TOKEN") : null;
-  return token ? <Outlet /> : <Navigate to="/login" replace />;
+  const location = useLocation();
+  const token = getToken();
+
+  if (!token) {
+    return <Navigate to="/login" replace state={{ from: location }} />;
+  }
+
+  return <Outlet />;
 }

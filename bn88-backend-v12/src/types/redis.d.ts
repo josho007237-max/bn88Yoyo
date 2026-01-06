@@ -17,3 +17,4 @@ declare module "redis" {
 
   export function createClient(options?: { url?: string }): RedisClientType;
 }
+

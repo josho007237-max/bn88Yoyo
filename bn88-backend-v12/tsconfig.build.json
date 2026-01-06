@@ -1,0 +1,12 @@
+// ...existing code...
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "Node16",
+    "moduleResolution": "node16",
+    "types": ["node"]
+  },
+  "include": ["src", "src/types"],
+  "exclude": ["node_modules", "dist", "tests"]
+}
+// ...existing code...

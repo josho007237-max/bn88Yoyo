@@ -80,3 +80,4 @@ export async function classifyKindFromText(
   // ถ้าไม่เข้า intent ไหนเลย
   return "other";
 }
+

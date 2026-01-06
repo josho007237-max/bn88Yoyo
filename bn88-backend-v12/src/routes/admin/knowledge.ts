@@ -9,8 +9,8 @@ const s = (v: unknown) =>
   typeof v === "string"
     ? v.trim()
     : Array.isArray(v)
-    ? String(v[0] ?? "").trim()
-    : "";
+      ? String(v[0] ?? "").trim()
+      : "";
 
 const n = (v: unknown, def = 20, min = 1, max = 100) => {
   const x = Number(s(v) || v);
@@ -70,9 +70,11 @@ r.post("/link/:botId", async (req: Request, res: Response) => {
     const botId = req.params.botId;
     const parsed = linkSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
-      return res
-        .status(400)
-        .json({ ok: false, message: "invalid_input", issues: parsed.error.issues });
+      return res.status(400).json({
+        ok: false,
+        message: "invalid_input",
+        issues: parsed.error.issues,
+      });
     }
     const { docIds } = parsed.data;
 
@@ -105,7 +107,7 @@ r.post("/link/:botId", async (req: Request, res: Response) => {
           where: { botId_docId: { botId, docId } },
           update: {},
           create: { botId, docId },
-        }),
+        })
       ),
     ]);
 
@@ -193,13 +195,28 @@ r.post("/", async (req: Request, res: Response) => {
     const parsed = upsertSchema.safeParse(req.body);
 
     if (!parsed.success) {
-      return res
-        .status(400)
-        .json({ ok: false, message: "invalid_input", issues: parsed.error.issues });
+      return res.status(400).json({
+        ok: false,
+        message: "invalid_input",
+        issues: parsed.error.issues,
+      });
     }
 
+    const title = (parsed.data.title ?? "").trim();
+    if (!title)
+      return res.status(400).json({ ok: false, message: "title is required" });
+
+    const body = (parsed.data.body ?? "").trim();
+    if (!body)
+      return res.status(400).json({ ok: false, message: "body is required" });
+
     const item = await prisma.knowledgeDoc.create({
-      data: { tenant, ...parsed.data },
+      data: {
+        ...parsed.data,
+        title,
+        body,
+        tenant,
+      },
     });
 
     return res.json({ ok: true, item });
@@ -224,9 +241,11 @@ r.put("/:id", async (req: Request, res: Response) => {
 
     const parsed = partialSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res
-        .status(400)
-        .json({ ok: false, message: "invalid_input", issues: parsed.error.issues });
+      return res.status(400).json({
+        ok: false,
+        message: "invalid_input",
+        issues: parsed.error.issues,
+      });
     }
 
     const item = await prisma.knowledgeDoc.update({
@@ -264,3 +283,4 @@ r.delete("/:id", async (req: Request, res: Response) => {
 });
 
 export default r;
+

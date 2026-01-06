@@ -52,3 +52,4 @@ export async function upsertAiConfig(
     systemPrompt: cfg.systemPrompt,
   };
 }
+

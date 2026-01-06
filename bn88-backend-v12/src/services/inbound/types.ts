@@ -42,3 +42,4 @@ export interface InboundEvent {
   // raw payload เผื่อเก็บเป็น meta/case ภายหลัง
   rawPayload: unknown;
 }
+

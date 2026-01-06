@@ -104,3 +104,4 @@ export function normalizeLineRichMessage(
     text,
   } as any;
 }
+

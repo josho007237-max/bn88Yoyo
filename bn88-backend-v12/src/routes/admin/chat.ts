@@ -18,6 +18,7 @@ import {
 
 const router = Router();
 const TENANT_DEFAULT = process.env.TENANT_DEFAULT || "bn9";
+
 const MESSAGE_TYPES = [
   "TEXT",
   "IMAGE",
@@ -28,10 +29,14 @@ const MESSAGE_TYPES = [
   "INLINE_KEYBOARD",
 ] as const satisfies MessageType[];
 
+const updateSessionMetaSchema = z.object({
+  status: z.enum(["open", "pending", "closed"]).optional(),
+  tags: z.union([z.array(z.string().min(1).max(50)), z.string()]).optional(),
+  hasProblem: z.boolean().optional(),
+});
+
 const replyPayloadSchema = z.object({
-  type: z
-    .enum(MESSAGE_TYPES as [MessageType, ...MessageType[]])
-    .optional(),
+  type: z.enum(MESSAGE_TYPES as [MessageType, ...MessageType[]]).optional(),
   text: z.string().optional(),
   attachmentUrl: z.string().url().optional(),
   attachmentMeta: z.any().optional(),
@@ -51,7 +56,14 @@ const richPayloadSchema = z.object({
   imageUrl: z.string().url().optional(),
   buttons: z.array(flexButtonSchema).optional(),
   inlineKeyboard: z
-    .array(z.array(z.object({ text: z.string().min(1), callbackData: z.string().min(1) })))
+    .array(
+      z.array(
+        z.object({
+          text: z.string().min(1),
+          callbackData: z.string().min(1),
+        })
+      )
+    )
     .optional(),
   altText: z.string().optional(),
 });
@@ -106,35 +118,54 @@ type MessagesQuery = {
 async function fetchAdminChatMessages(
   params: MessagesQuery,
   client: PrismaLike = prisma
-): Promise<{ conversationId: string | null; items: any[]; conversation?: any }>
-{
-  const { tenant, conversationId, sessionId, limit = 200, offset = 0, requestId } = params;
+): Promise<{
+  conversationId: string | null;
+  items: any[];
+  conversation?: any;
+}> {
+  let {
+    tenant,
+    conversationId,
+    sessionId,
+    limit = 200,
+    offset = 0,
+    requestId,
+  } = params;
+
   if (!conversationId && !sessionId) {
     throw new HttpError(400, "conversationId_or_sessionId_required");
   }
 
   const log = createRequestLogger(requestId);
-
   let conversation: any | null = null;
+  let session: any | null = null;
+
+  // 1) ถ้ามี conversationId: ใช้ tenant จาก request ตามปกติ
   if (conversationId) {
     conversation = await client.conversation.findFirst({
       where: { id: conversationId, tenant },
       select: { id: true, botId: true, userId: true },
     });
-    if (!conversation) {
-      throw new HttpError(404, "conversation_not_found");
-    }
+    if (!conversation) throw new HttpError(404, "conversation_not_found");
   }
 
-  let session: any | null = null;
+  // 2) ถ้ามี sessionId: หา session ด้วย id อย่างเดียวก่อน แล้ว “ยึด tenant จาก session”
   if (!conversationId && sessionId) {
-    session = await client.chatSession.findFirst({
-      where: { id: sessionId, tenant },
-      select: { id: true, botId: true, platform: true, userId: true },
+    session = await client.chatSession.findUnique({
+      where: { id: sessionId },
+      select: {
+        id: true,
+        botId: true,
+        platform: true,
+        userId: true,
+        tenant: true,
+      },
     });
-    if (!session) {
-      throw new HttpError(404, "chat_session_not_found");
-    }
+    if (!session) throw new HttpError(404, "chat_session_not_found");
+
+    // ยึด tenant ที่ถูกต้องจาก session เพื่อกัน header/config เพี้ยน
+    tenant = session.tenant;
+
     conversation = await client.conversation.findFirst({
       where: { botId: session.botId, userId: session.userId, tenant },
       select: { id: true, botId: true, userId: true },
@@ -142,12 +173,12 @@ async function fetchAdminChatMessages(
   }
 
   const whereClause = conversationId
-    ? { conversationId }
-    : { sessionId: session?.id };
+    ? { tenant, conversationId }
+    : { tenant, sessionId: session!.id };
 
-  const messages = await client.chatMessage.findMany({
+  const rows = await client.chatMessage.findMany({
     where: whereClause,
-    orderBy: { createdAt: "asc" },
+    orderBy: { createdAt: "desc" }, // เอาล่าสุดก่อน
     skip: offset,
     take: limit,
     include: {
@@ -156,11 +187,13 @@ async function fetchAdminChatMessages(
     },
   });
 
+  const messages = rows.reverse(); // กลับให้ UI เรียงเก่า -> ใหม่
+
   const resolvedConversation =
     conversation ?? messages[0]?.conversation ?? undefined;
 
   log.info(
-    `[Admin] chat/messages conversationId=${
+    `[Admin] chat/messages tenant=${tenant} conversationId=${
       resolvedConversation?.id ?? conversationId ?? null
     } count=${messages.length}`
   );
@@ -177,6 +210,7 @@ async function fetchAdminChatMessages(
     attachmentUrl: m.attachmentUrl,
     attachmentMeta: m.attachmentMeta,
     type: m.type,
+    senderType: (m as any).senderType ?? null,
   }));
 
   return {
@@ -246,11 +280,15 @@ function buildLineMessage(
     } as any;
   }
 
-  if (type === "STICKER" && attachmentMeta?.packageId && attachmentMeta?.stickerId) {
+  if (
+    type === "STICKER" &&
+    attachmentMeta?.packageId &&
+    (attachmentMeta as any)?.stickerId
+  ) {
     return {
       type: "sticker",
       packageId: String(attachmentMeta.packageId),
-      stickerId: String(attachmentMeta.stickerId),
+      stickerId: String((attachmentMeta as any).stickerId),
     } as any;
   }
 
@@ -320,6 +358,7 @@ async function sendTelegramRich(
       const keyboard = (attachmentMeta as any)?.inlineKeyboard as
         | Array<Array<{ text: string; callbackData: string }>>
         | undefined;
+
       const inline_keyboard = keyboard?.map((row) =>
         row.map((btn) => ({ text: btn.text, callback_data: btn.callbackData }))
       );
@@ -344,33 +383,36 @@ async function sendTelegramRich(
     }
 
     if (type === "FILE" && attachmentUrl) {
-      const resp = await f(`https://api.telegram.org/bot${token}/sendDocument`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          document: attachmentUrl,
-          caption: text || undefined,
-          reply_to_message_id: replyToMessageId,
-        }),
-      });
+      const resp = await f(
+        `https://api.telegram.org/bot${token}/sendDocument`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            document: attachmentUrl,
+            caption: text || undefined,
+            reply_to_message_id: replyToMessageId,
+          }),
+        }
+      );
       return resp.ok;
     }
 
-    if (type === "STICKER" && attachmentMeta?.stickerId) {
+    if (type === "STICKER" && (attachmentMeta as any)?.stickerId) {
       const resp = await f(`https://api.telegram.org/bot${token}/sendSticker`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           chat_id: chatId,
-          sticker: String(attachmentMeta.stickerId),
+          sticker: String((attachmentMeta as any).stickerId),
           reply_to_message_id: replyToMessageId,
         }),
       });
       return resp.ok;
     }
 
-    // default to text
+    // default text
     return await sendTelegramMessage(token, chatId, text, replyToMessageId);
   } catch (err) {
     console.error("[Telegram] send rich error", err);
@@ -386,32 +428,201 @@ router.get(
   "/sessions",
   requirePermission(["manageCampaigns", "viewReports"]),
   async (req: Request, res: Response) => {
+    const requestId = getRequestId(req);
+    const log = createRequestLogger(requestId);
+
     try {
       const tenant = getTenant(req);
+
       const botId =
         typeof req.query.botId === "string" ? req.query.botId : undefined;
+
       const platform =
         typeof req.query.platform === "string"
           ? (req.query.platform as string)
           : undefined;
+
       const limit = Number(req.query.limit) || 50;
 
+      const status =
+        typeof req.query.status === "string" ? req.query.status : undefined;
+
+      const isIssueParam =
+        typeof req.query.isIssue === "string" ? req.query.isIssue : undefined;
+
+      const q =
+        typeof req.query.q === "string" && req.query.q.trim().length > 0
+          ? req.query.q.trim()
+          : undefined;
+
+      const dateFrom =
+        typeof req.query.dateFrom === "string" ? req.query.dateFrom : undefined;
+
+      const dateTo =
+        typeof req.query.dateTo === "string" ? req.query.dateTo : undefined;
+
+      const where: any = {
+        tenant,
+      };
+
+      if (botId) where.botId = botId;
+      if (platform) where.platform = platform;
+
+      if (status && ["open", "pending", "closed"].includes(status)) {
+        where.status = status;
+      }
+
+      if (isIssueParam === "true") {
+        where.hasProblem = true;
+      } else if (isIssueParam === "false") {
+        where.hasProblem = false;
+      }
+
+      if (dateFrom || dateTo) {
+        where.lastMessageAt = {};
+        if (dateFrom) where.lastMessageAt.gte = new Date(String(dateFrom));
+        if (dateTo) {
+          const to = new Date(String(dateTo));
+          where.lastMessageAt.lte = to;
+        }
+      }
+
+      if (q) {
+        where.OR = [
+          { userId: { contains: q } },
+          { displayName: { contains: q } },
+          { lastText: { contains: q } },
+        ];
+      }
+
       const sessions = await prisma.chatSession.findMany({
-        where: {
-          tenant,
-          ...(botId ? { botId } : {}),
-          ...(platform ? { platform } : {}),
-        },
+        where,
         orderBy: { lastMessageAt: "desc" },
         take: limit,
+        select: {
+          id: true,
+          userId: true,
+          displayName: true,
+          platform: true,
+          lastMessageAt: true,
+          lastText: true,
+          lastDirection: true,
+          status: true,
+          tags: true,
+          caseCount: true,
+          hasProblem: true,
+          unread: true,
+        },
       });
 
-      return res.json({ ok: true, sessions, items: sessions });
-    } catch (err) {
+      log.info(
+        {
+          requestId,
+          tenant,
+          botId,
+          platform,
+          status,
+          isIssueParam,
+          q,
+          dateFrom,
+          dateTo,
+          count: sessions.length,
+        },
+        "chat_sessions_ok"
+      );
+
+      return res.json({ ok: true, items: sessions });
+    } catch (err: any) {
       console.error("[admin chat] list sessions error", err);
       return res
         .status(500)
         .json({ ok: false, message: "internal_error_list_sessions" });
+    }
+  }
+);
+
+/* ------------------------------------------------------------------ */
+/* PATCH /api/admin/chat/sessions/:id/meta                            */
+/* ------------------------------------------------------------------ */
+
+router.patch(
+  "/sessions/:id/meta",
+  requirePermission(["manageCampaigns"]),
+  async (req: Request, res: Response): Promise<Response> => {
+    try {
+      const tenant = getTenant(req);
+      const id = String(req.params.id || "").trim();
+
+      const parsed = updateSessionMetaSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res.status(400).json({
+          ok: false,
+          message: "invalid_input",
+          issues: parsed.error.issues,
+        });
+      }
+
+      const { status, tags, hasProblem } = parsed.data;
+
+      const session = await prisma.chatSession.findFirst({
+        where: { id, tenant },
+      });
+      if (!session) {
+        return res
+          .status(404)
+          .json({ ok: false, message: "chat_session_not_found" });
+      }
+
+      // tags เก็บเป็น “string” แบบ JSON เสมอ (ปลอดภัยสุด ไม่ชน type DB)
+      let tagsValue: string | undefined;
+
+      if (Array.isArray(tags)) {
+        tagsValue = tags
+          .map((t) => t.trim())
+          .filter(Boolean)
+          .join(", ");
+      } else if (typeof tags === "string") {
+        tagsValue = tags.trim();
+      }
+
+      const updated = await prisma.chatSession.update({
+        where: { id: session.id },
+        data: {
+          ...(status ? { status } : {}),
+          ...(tagsValue !== undefined ? { tags: tagsValue as any } : {}),
+          ...(hasProblem !== undefined ? { hasProblem } : {}),
+        },
+        select: {
+          id: true,
+          status: true,
+          tags: true,
+          caseCount: true,
+          hasProblem: true,
+          unread: true,
+        },
+      });
+
+      // ส่ง SSE ให้ FE รีเฟรชได้
+      try {
+        sseHub.broadcast({
+          type: "chat:session:meta_updated",
+          tenant,
+          botId: session.botId,
+          sessionId: session.id,
+          status: updated.status,
+          tags: updated.tags,
+          hasProblem: updated.hasProblem,
+        } as any);
+      } catch (e) {
+        console.warn("[admin chat meta] SSE broadcast warn", e);
+      }
+
+      return res.json({ ok: true, session: updated });
+    } catch (err) {
+      console.error("[admin chat] update meta error", err);
+      return res
+        .status(500)
+        .json({ ok: false, message: "internal_error_update_meta" });
     }
   }
 );
@@ -426,6 +637,7 @@ router.get(
   async (req: Request, res: Response): Promise<Response> => {
     const requestId = getRequestId(req);
     const log = createRequestLogger(requestId);
+
     try {
       const tenant = getTenant(req);
       const parsed = searchQuerySchema.safeParse(req.query ?? {});
@@ -443,8 +655,20 @@ router.get(
           ...(userId ? { session: { userId } } : {}),
           OR: [
             { text: { contains: q } },
-            { attachmentMeta: { path: ["fileName"], string_contains: q } as any },
-            { attachmentMeta: { path: ["mimeType"], string_contains: q } as any },
+
+            // ✅ SQLite: path ต้องเป็น string (ไม่ใช่ ["fileName"])
+            {
+              attachmentMeta: {
+                path: "fileName",
+                string_contains: q,
+              } as any,
+            },
+            {
+              attachmentMeta: {
+                path: "mimeType",
+                string_contains: q,
+              } as any,
+            },
           ],
         },
         include: {
@@ -462,17 +686,23 @@ router.get(
         take: limit,
       });
 
-      log.info({ requestId, q, limit, count: messages.length }, "chat_search_ok");
+      log.info(
+        { requestId, q, limit, count: messages.length },
+        "chat_search_ok"
+      );
+
       return res.json({ ok: true, items: messages });
     } catch (err: any) {
       log.error({ err, requestId }, "chat_search_error");
-      return res.status(500).json({ ok: false, message: "internal_error_search" });
+      return res
+        .status(500)
+        .json({ ok: false, message: "internal_error_search" });
     }
   }
 );
 
 /* ------------------------------------------------------------------ */
-/* GET /api/admin/chat/messages                                        */
+/* GET /api/admin/chat/messages                                       */
 /* ------------------------------------------------------------------ */
 
 router.get(
@@ -481,6 +711,7 @@ router.get(
   async (req: Request, res: Response): Promise<Response> => {
     const requestId = getRequestId(req);
     const log = createRequestLogger(requestId);
+
     try {
       const tenant = getTenant(req);
       const parsed = messagesQuerySchema.safeParse(req.query ?? {});
@@ -488,11 +719,18 @@ router.get(
         return res.status(400).json({ ok: false, message: "invalid_query" });
       }
 
-      const { conversationId, sessionId, limit = 200, offset = 0 } = parsed.data;
+      const {
+        conversationId,
+        sessionId,
+        limit = 200,
+        offset = 0,
+      } = parsed.data;
+
       if (!conversationId && !sessionId) {
-        return res
-          .status(400)
-          .json({ ok: false, message: "conversationId_or_sessionId_required" });
+        return res.status(400).json({
+          ok: false,
+          message: "conversationId_or_sessionId_required",
+        });
       }
 
       const result = await fetchAdminChatMessages(
@@ -510,46 +748,183 @@ router.get(
         return res.status(err.status).json({ ok: false, message: err.message });
       }
       log.error({ err, requestId }, "chat_messages_error");
-      return res.status(500).json({ ok: false, message: "internal_error_list_messages" });
+      return res.status(500).json({
+        ok: false,
+        message: "internal_error_list_messages",
+      });
     }
   }
 );
 
 /* ------------------------------------------------------------------ */
 /* GET /api/admin/chat/sessions/:id/messages                          */
+/* - ใช้ logic เดียวกับ /api/admin/chat/messages                      */
 /* ------------------------------------------------------------------ */
 
 router.get(
   "/sessions/:id/messages",
   requirePermission(["manageCampaigns", "viewReports"]),
   async (req: Request, res: Response): Promise<Response> => {
+    const requestId = getRequestId(req);
+    const log = createRequestLogger(requestId);
+
     try {
       const tenant = getTenant(req);
-      const sessionId = String(req.params.id);
-      const limit = Number(req.query.limit) || 200;
+      const sessionId = String(req.params.id || "").trim();
+      const limit = Math.min(Number(req.query.limit ?? 200) || 200, 500);
+      const offset = Math.max(Number(req.query.offset ?? 0) || 0, 0);
 
-      const session = await prisma.chatSession.findFirst({
-        where: { id: sessionId, tenant },
-      });
+      log.info(
+        { tenant, sessionId, limit, offset },
+        "chat_session_messages_request"
+      );
 
-      if (!session) {
-        return res
-          .status(404)
-          .json({ ok: false, message: "chat_session_not_found" });
+      const result = await fetchAdminChatMessages(
+        { tenant, sessionId, limit, offset, requestId },
+        prisma
+      );
+
+      return res.json({ ok: true, ...result });
+    } catch (err: any) {
+      if (err instanceof HttpError) {
+        return res.status(err.status).json({ ok: false, message: err.message });
       }
-
-      const messages = await prisma.chatMessage.findMany({
-        where: { sessionId: session.id },
-        orderBy: { createdAt: "asc" },
-        take: limit,
-      });
-
-      return res.json({ ok: true, session, messages, items: messages });
-    } catch (err) {
-      console.error("[admin chat] list messages error", err);
+      log.error({ err, requestId }, "chat_session_messages_error");
       return res
         .status(500)
         .json({ ok: false, message: "internal_error_list_messages" });
+    }
+  }
+);
+
+/* ------------------------------------------------------------------ */
+/* GET /api/admin/chat/line-content/:id                               */
+/* - รองรับทั้ง ChatMessage.id และ LINE messageId                     */
+/* ------------------------------------------------------------------ */
+
+router.get(
+  "/line-content/:id",
+  requirePermission(["manageCampaigns", "viewReports"]),
+  async (req: Request, res: Response): Promise<Response> => {
+    const requestId = getRequestId(req);
+    const log = createRequestLogger(requestId);
+
+    try {
+      const tenant = getTenant(req);
+      const id = String(req.params.id || "").trim();
+
+      if (!id) {
+        return res
+          .status(400)
+          .json({ ok: false, message: "line_message_id_required" });
+      }
+
+      // 1) ✅ ถ้า frontend ส่ง m.id (ChatMessage.id) -> หา message ด้วย id ก่อน
+      let msg = await prisma.chatMessage.findFirst({
+        where: { id, tenant },
+        select: {
+          botId: true,
+          platform: true,
+          attachmentMeta: true,
+        },
+      });
+
+      // 2) ถ้าไม่เจอ ค่อย fallback หาโดย attachmentMeta.messageId (กรณีส่ง LINE messageId มา)
+      if (!msg) {
+        msg = await prisma.chatMessage.findFirst({
+          where: {
+            tenant,
+            platform: "line",
+            attachmentMeta: {
+              // ✅ SQLite: path ต้องเป็น string
+              path: "messageId",
+              equals: id,
+            } as any,
+          },
+          select: { botId: true, platform: true, attachmentMeta: true },
+          orderBy: { createdAt: "desc" },
+        });
+      }
+
+      if (!msg) {
+        return res
+          .status(404)
+          .json({ ok: false, message: "line_message_not_found" });
+      }
+
+      if (msg.platform !== "line") {
+        return res
+          .status(400)
+          .json({ ok: false, message: "not_a_line_message" });
+      }
+
+      // ดึง LINE messageId จาก meta (หรือถ้า fallback แล้ว id คือ LINE messageId ก็ใช้ id)
+      const meta: any = msg.attachmentMeta ?? {};
+      const lineMessageId: string = String(
+        meta.messageId || meta.lineMessageId || meta.contentMessageId || id
+      ).trim();
+
+      if (!lineMessageId) {
+        return res.status(400).json({
+          ok: false,
+          message: "line_message_id_missing_in_meta",
+        });
+      }
+
+      const bot = await prisma.bot.findUnique({
+        where: { id: msg.botId },
+        include: { secret: true },
+      });
+
+      const channelAccessToken = bot?.secret?.channelAccessToken;
+      if (!bot || !channelAccessToken) {
+        return res
+          .status(404)
+          .json({ ok: false, message: "line_token_not_found" });
+      }
+
+      const f = (globalThis as any).fetch as typeof fetch | undefined;
+      if (!f) {
+        log.error("[line-content] global fetch not available");
+        return res
+          .status(500)
+          .json({ ok: false, message: "internal_error_fetch" });
+      }
+
+      const url = `https://api-data.line.me/v2/bot/message/${lineMessageId}/content`;
+      const resp = await f(url, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${channelAccessToken}`,
+        },
+      });
+
+      if (!resp.ok) {
+        const t = await resp.text().catch(() => "");
+        log.warn("[line-content] LINE error", resp.status, t);
+        return res.status(resp.status).send(t);
+      }
+
+      const arrayBuf = await resp.arrayBuffer();
+      const buf = Buffer.from(arrayBuf);
+      const contentType =
+        resp.headers.get("content-type") || "application/octet-stream";
+
+      res.setHeader("Content-Type", contentType);
+
+      const fileName: string | undefined = meta.fileName;
+      if (fileName) {
+        // ปลอดภัยกว่า encode เฉย ๆ นิดนึง (กัน quote)
+        const safeName = encodeURIComponent(fileName).replace(/%22/g, "");
+        res.setHeader("Content-Disposition", `inline; filename="${safeName}"`);
+      }
+
+      return res.send(buf);
+    } catch (err: any) {
+      log.error({ err, requestId }, "line_content_error");
+      return res
+        .status(500)
+        .json({ ok: false, message: "internal_error_line_content" });
     }
   }
 );
@@ -564,6 +939,7 @@ router.post(
   async (req: Request, res: Response): Promise<Response> => {
     const requestId = getRequestId(req);
     const log = createRequestLogger(requestId);
+
     try {
       const tenant = getTenant(req);
       const parsed = richPayloadSchema.safeParse(req.body ?? {});
@@ -584,7 +960,9 @@ router.post(
       }
 
       if (payload.platform && payload.platform !== session.platform) {
-        return res.status(400).json({ ok: false, message: "platform_mismatch" });
+        return res
+          .status(400)
+          .json({ ok: false, message: "platform_mismatch" });
       }
 
       const bot = session.bot;
@@ -605,8 +983,11 @@ router.post(
       if (session.platform === "line") {
         const token = bot.secret?.channelAccessToken;
         if (!token) {
-          return res.status(400).json({ ok: false, message: "line_token_missing" });
+          return res
+            .status(400)
+            .json({ ok: false, message: "line_token_missing" });
         }
+
         const flexPayload: FlexMessageInput = {
           altText: payload.altText || payload.title,
           cards: [
@@ -620,6 +1001,7 @@ router.post(
         };
         const flexMessage = buildFlexMessage(flexPayload);
         attachmentMeta = flexMessage;
+
         delivered = await sendLineRichMessage(
           token,
           session.userId,
@@ -637,7 +1019,10 @@ router.post(
         }
 
         const inlineKeyboard = payload.inlineKeyboard?.map((row) =>
-          row.map((btn) => ({ text: btn.text, callbackData: btn.callbackData }))
+          row.map((btn) => ({
+            text: btn.text,
+            callbackData: btn.callbackData,
+          }))
         );
 
         if (inlineKeyboard?.length) {
@@ -660,10 +1045,16 @@ router.post(
           attachmentMeta ?? undefined
         );
       } else {
-        return res.status(400).json({ ok: false, message: "unsupported_platform" });
+        return res
+          .status(400)
+          .json({ ok: false, message: "unsupported_platform" });
       }
 
-      recordDeliveryMetric(`${session.platform}:${bot.id}`, delivered, requestId);
+      recordDeliveryMetric(
+        `${session.platform}:${bot.id}`,
+        delivered,
+        requestId
+      );
 
       const msg = await prisma.chatMessage.create({
         data: {
@@ -712,13 +1103,21 @@ router.post(
 
       await prisma.chatSession.update({
         where: { id: session.id },
-        data: { lastMessageAt: new Date(), lastText: msg.text, lastDirection: "admin" },
+        data: {
+          lastMessageAt: new Date(),
+          lastText: msg.text,
+          lastDirection: "admin",
+        },
       });
 
       return res.json({ ok: true, delivered, messageId: msg.id });
     } catch (err: any) {
+      const requestId = getRequestId(req);
+      const log = createRequestLogger(requestId);
       log.error({ err, requestId }, "admin_rich_message_error");
-      return res.status(500).json({ ok: false, message: "internal_error_rich_message" });
+      return res
+        .status(500)
+        .json({ ok: false, message: "internal_error_rich_message" });
     }
   }
 );
@@ -736,24 +1135,31 @@ router.post(
       const log = createRequestLogger(requestId);
       const tenant = getTenant(req);
       const sessionId = String(req.params.id);
+
       const parsed = replyPayloadSchema.safeParse(req.body ?? {});
       if (!parsed.success) {
         return res.status(400).json({ ok: false, message: "invalid_payload" });
       }
 
-      const { text, attachmentUrl, attachmentMeta, type: rawType } = parsed.data;
+      const {
+        text,
+        attachmentUrl,
+        attachmentMeta,
+        type: rawType,
+      } = parsed.data;
+
       const messageType: MessageType = rawType ?? "TEXT";
       const messageText = (text ?? "").trim();
 
       if (!messageText && !attachmentUrl) {
-        return res
-          .status(400)
-          .json({ ok: false, message: "text_or_attachment_required" });
+        return res.status(400).json({
+          ok: false,
+          message: "text_or_attachment_required",
+        });
       }
 
       const fallbackText = messageText || `[${messageType.toLowerCase()}]`;
 
-      // หา session
       const session = await prisma.chatSession.findFirst({
         where: { id: sessionId, tenant },
       });
@@ -764,7 +1170,6 @@ router.post(
           .json({ ok: false, message: "chat_session_not_found" });
       }
 
-      // หา bot + secret
       const bot = await prisma.bot.findUnique({
         where: { id: session.botId },
         include: { secret: true },
@@ -787,7 +1192,6 @@ router.post(
       const platform = session.platform;
       let delivered = false;
 
-      // ส่งข้อความออกไปตาม platform
       if (platform === "telegram") {
         const token = bot.secret?.telegramBotToken;
         if (!token) {
@@ -797,7 +1201,6 @@ router.post(
           );
         } else {
           try {
-            // สำหรับแชทส่วนตัว userId มักเท่ากับ chatId
             delivered = await sendTelegramRich(
               token,
               session.userId,
@@ -849,7 +1252,6 @@ router.post(
         requestId,
       });
 
-      // บันทึกข้อความฝั่ง admin ลง ChatMessage
       const now = new Date();
       const adminMsg = await prisma.chatMessage.create({
         data: {
@@ -878,7 +1280,6 @@ router.post(
         },
       });
 
-      // อัปเดต session
       await prisma.chatSession.update({
         where: { id: session.id },
         data: {
@@ -888,7 +1289,6 @@ router.post(
         },
       });
 
-      // broadcast SSE ไปหน้า Dashboard / Chat Center
       try {
         sseHub.broadcast({
           type: "chat:message:new",
@@ -928,3 +1328,4 @@ router.post(
 
 export default router;
 export { router as chatAdminRouter, fetchAdminChatMessages, HttpError };
+

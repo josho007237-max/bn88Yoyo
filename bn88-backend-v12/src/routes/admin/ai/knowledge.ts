@@ -104,13 +104,30 @@ r.post("/docs", async (req: Request, res: Response) => {
     const tenant = tenantOf(req);
     const parsed = docSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
-      return res
-        .status(400)
-        .json({ ok: false, message: "invalid_input", issues: parsed.error.issues });
+      return res.status(400).json({
+        ok: false,
+        message: "invalid_input",
+        issues: parsed.error.issues,
+      });
+    }
+
+    const title = (parsed.data.title ?? "").trim();
+    if (!title) {
+      return res.status(400).json({ ok: false, message: "title is required" });
+    }
+
+    const body = (parsed.data.body ?? "").trim();
+    if (!body) {
+      return res.status(400).json({ ok: false, message: "body is required" });
     }
 
     const item = await prisma.knowledgeDoc.create({
-      data: { tenant, ...parsed.data },
+      data: {
+        ...parsed.data,
+        title,
+        body, // ✅ สำคัญ: override ให้เป็น string แน่นอน
+        tenant,
+      },
     });
 
     return res.json({ ok: true, item });
@@ -147,13 +164,16 @@ r.patch("/docs/:id", async (req: Request, res: Response) => {
       where: { id: req.params.id, tenant },
       select: { id: true },
     });
-    if (!exists) return res.status(404).json({ ok: false, message: "not_found" });
+    if (!exists)
+      return res.status(404).json({ ok: false, message: "not_found" });
 
     const parsed = docPartial.safeParse(req.body ?? {});
     if (!parsed.success) {
-      return res
-        .status(400)
-        .json({ ok: false, message: "invalid_input", issues: parsed.error.issues });
+      return res.status(400).json({
+        ok: false,
+        message: "invalid_input",
+        issues: parsed.error.issues,
+      });
     }
 
     const item = await prisma.knowledgeDoc.update({
@@ -175,7 +195,8 @@ r.delete("/docs/:id", async (req: Request, res: Response) => {
       where: { id: req.params.id, tenant },
       select: { id: true },
     });
-    if (!exists) return res.status(404).json({ ok: false, message: "not_found" });
+    if (!exists)
+      return res.status(404).json({ ok: false, message: "not_found" });
 
     await prisma.knowledgeDoc.delete({ where: { id: req.params.id } });
     return res.json({ ok: true });
@@ -191,7 +212,8 @@ r.get("/docs/:id/chunks", async (req: Request, res: Response) => {
   try {
     const tenant = tenantOf(req);
     const doc = await ensureDocTenant(req.params.id, tenant);
-    if (!doc) return res.status(404).json({ ok: false, message: "doc_not_found" });
+    if (!doc)
+      return res.status(404).json({ ok: false, message: "doc_not_found" });
 
     const items = await prisma.knowledgeChunk.findMany({
       where: { docId: doc.id },
@@ -209,13 +231,16 @@ r.post("/docs/:id/chunks", async (req: Request, res: Response) => {
   try {
     const tenant = tenantOf(req);
     const doc = await ensureDocTenant(req.params.id, tenant);
-    if (!doc) return res.status(404).json({ ok: false, message: "doc_not_found" });
+    if (!doc)
+      return res.status(404).json({ ok: false, message: "doc_not_found" });
 
     const parsed = chunkSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
-      return res
-        .status(400)
-        .json({ ok: false, message: "invalid_input", issues: parsed.error.issues });
+      return res.status(400).json({
+        ok: false,
+        message: "invalid_input",
+        issues: parsed.error.issues,
+      });
     }
 
     const item = await prisma.knowledgeChunk.create({
@@ -247,17 +272,25 @@ r.patch("/chunks/:chunkId", async (req: Request, res: Response) => {
 
     const parsed = chunkPartial.safeParse(req.body ?? {});
     if (!parsed.success) {
-      return res
-        .status(400)
-        .json({ ok: false, message: "invalid_input", issues: parsed.error.issues });
+      return res.status(400).json({
+        ok: false,
+        message: "invalid_input",
+        issues: parsed.error.issues,
+      });
     }
 
     const item = await prisma.knowledgeChunk.update({
       where: { id: chunk.id },
       data: {
-        ...(parsed.data.content !== undefined ? { content: parsed.data.content } : {}),
-        ...(parsed.data.embedding !== undefined ? { embedding: parsed.data.embedding } : {}),
-        ...(parsed.data.tokens !== undefined ? { tokens: parsed.data.tokens } : {}),
+        ...(parsed.data.content !== undefined
+          ? { content: parsed.data.content }
+          : {}),
+        ...(parsed.data.embedding !== undefined
+          ? { embedding: parsed.data.embedding }
+          : {}),
+        ...(parsed.data.tokens !== undefined
+          ? { tokens: parsed.data.tokens }
+          : {}),
       },
     });
 
@@ -292,7 +325,8 @@ r.get("/bots/:botId/knowledge", async (req: Request, res: Response) => {
   try {
     const tenant = tenantOf(req);
     const bot = await ensureBotAndTenant(req.params.botId, tenant);
-    if (!bot) return res.status(404).json({ ok: false, message: "bot_not_found" });
+    if (!bot)
+      return res.status(404).json({ ok: false, message: "bot_not_found" });
 
     const links = await prisma.botKnowledge.findMany({
       where: { botId: bot.id },
@@ -320,17 +354,21 @@ r.post("/bots/:botId/knowledge", async (req: Request, res: Response) => {
   try {
     const tenant = tenantOf(req);
     const bot = await ensureBotAndTenant(req.params.botId, tenant);
-    if (!bot) return res.status(404).json({ ok: false, message: "bot_not_found" });
+    if (!bot)
+      return res.status(404).json({ ok: false, message: "bot_not_found" });
 
     const parsed = linkSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
-      return res
-        .status(400)
-        .json({ ok: false, message: "invalid_input", issues: parsed.error.issues });
+      return res.status(400).json({
+        ok: false,
+        message: "invalid_input",
+        issues: parsed.error.issues,
+      });
     }
 
     const doc = await ensureDocTenant(parsed.data.docId, tenant);
-    if (!doc) return res.status(404).json({ ok: false, message: "doc_not_found" });
+    if (!doc)
+      return res.status(404).json({ ok: false, message: "doc_not_found" });
 
     await prisma.botKnowledge.upsert({
       where: { botId_docId: { botId: bot.id, docId: doc.id } },
@@ -345,32 +383,38 @@ r.post("/bots/:botId/knowledge", async (req: Request, res: Response) => {
   }
 });
 
-r.delete("/bots/:botId/knowledge/:docId", async (req: Request, res: Response) => {
-  try {
-    const tenant = tenantOf(req);
-    const bot = await ensureBotAndTenant(req.params.botId, tenant);
-    if (!bot) return res.status(404).json({ ok: false, message: "bot_not_found" });
+r.delete(
+  "/bots/:botId/knowledge/:docId",
+  async (req: Request, res: Response) => {
+    try {
+      const tenant = tenantOf(req);
+      const bot = await ensureBotAndTenant(req.params.botId, tenant);
+      if (!bot)
+        return res.status(404).json({ ok: false, message: "bot_not_found" });
 
-    const doc = await ensureDocTenant(req.params.docId, tenant);
-    if (!doc) return res.status(404).json({ ok: false, message: "doc_not_found" });
+      const doc = await ensureDocTenant(req.params.docId, tenant);
+      if (!doc)
+        return res.status(404).json({ ok: false, message: "doc_not_found" });
 
-    await prisma.botKnowledge.deleteMany({
-      where: { botId: bot.id, docId: doc.id },
-    });
+      await prisma.botKnowledge.deleteMany({
+        where: { botId: bot.id, docId: doc.id },
+      });
 
-    return res.json({ ok: true });
-  } catch (err) {
-    console.error("[knowledge][bot:remove]", err);
-    return res.status(500).json({ ok: false, message: "internal_error" });
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error("[knowledge][bot:remove]", err);
+      return res.status(500).json({ ok: false, message: "internal_error" });
+    }
   }
-});
+);
 
 /* ---------------------------- legacy link helper --------------------------- */
 
 r.get("/link/:botId", async (req: Request, res: Response) => {
   const tenant = tenantOf(req);
   const bot = await ensureBotAndTenant(req.params.botId, tenant);
-  if (!bot) return res.status(404).json({ ok: false, message: "bot_not_found" });
+  if (!bot)
+    return res.status(404).json({ ok: false, message: "bot_not_found" });
 
   const links = await prisma.botKnowledge.findMany({
     where: { botId: bot.id },
@@ -389,10 +433,13 @@ r.get("/link/:botId", async (req: Request, res: Response) => {
 r.post("/link/:botId", async (req: Request, res: Response) => {
   const tenant = tenantOf(req);
   const bot = await ensureBotAndTenant(req.params.botId, tenant);
-  if (!bot) return res.status(404).json({ ok: false, message: "bot_not_found" });
+  if (!bot)
+    return res.status(404).json({ ok: false, message: "bot_not_found" });
 
   const docs = Array.isArray(req.body?.docIds) ? req.body.docIds : [];
-  const validDocIds = docs.filter((d: unknown) => typeof d === "string" && d.trim());
+  const validDocIds = docs.filter(
+    (d: unknown) => typeof d === "string" && d.trim()
+  );
 
   await prisma.$transaction([
     prisma.botKnowledge.deleteMany({ where: { botId: bot.id } }),
@@ -409,3 +456,4 @@ r.post("/link/:botId", async (req: Request, res: Response) => {
 });
 
 export default r;
+

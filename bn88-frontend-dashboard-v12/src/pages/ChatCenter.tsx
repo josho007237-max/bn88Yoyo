@@ -1,10 +1,11 @@
 // src/pages/ChatCenter.tsx
+
 import React, {
+  useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
-  useMemo,
-  useCallback,
 } from "react";
 import toast from "react-hot-toast";
 import {
@@ -16,6 +17,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+
 import {
   type BotItem,
   type ChatSession,
@@ -45,10 +47,14 @@ import {
   createEngagementMessage,
   updateEngagementMessage,
   deleteEngagementMessage,
+  getLineContentBlob,
 } from "../lib/api";
 
 const POLL_INTERVAL_MS = 3000; // 3 วินาที
 const PAGE_SIZE = 50;
+
+// ใช้ SSE จริงจัง => ปิด polling
+const ENABLE_SSE = true;
 
 type PlatformFilterValue =
   | "all"
@@ -57,6 +63,7 @@ type PlatformFilterValue =
   | "facebook"
   | "webchat"
   | "other";
+type MainTab = "chat" | "automation" | "live" | "rich" | "metrics";
 
 type MetricsSnapshot = {
   deliveryTotal: number;
@@ -78,7 +85,6 @@ type ConversationGroup = {
 
 /* ---------------------- Intent helpers (frontend only) ---------------------- */
 
-/** ดึง intent code ล่าสุดจาก session (ลองอ่านจากหลาย field) */
 const getSessionIntentCode = (s: ChatSession): string | null => {
   const anySession = s as any;
   return (
@@ -90,7 +96,6 @@ const getSessionIntentCode = (s: ChatSession): string | null => {
   );
 };
 
-/** ดึง intent code จากข้อความ (ลองอ่านจากหลาย field/meta) */
 const getMessageIntentCode = (m: ChatMessage): string | null => {
   const anyMsg = m as any;
   return (
@@ -103,7 +108,6 @@ const getMessageIntentCode = (m: ChatMessage): string | null => {
   );
 };
 
-/** แปลง intent code → label ภาษาไทยสั้น ๆ */
 const intentCodeToLabel = (code?: string | null): string | null => {
   if (!code) return null;
   const c = String(code).toLowerCase();
@@ -112,10 +116,9 @@ const intentCodeToLabel = (code?: string | null): string | null => {
   if (c === "register") return "สมัครสมาชิก";
   if (c === "kyc") return "ยืนยันตัวตน";
   if (c === "other") return "อื่น ๆ";
-  return code; // fallback แสดง code ตรง ๆ
+  return code;
 };
 
-/** Badge intent สำหรับใช้ใน UI หลายที่ */
 const IntentBadge: React.FC<{ code?: string | null }> = ({ code }) => {
   const label = intentCodeToLabel(code);
   if (!label || String(code).toLowerCase() === "other") return null;
@@ -133,12 +136,11 @@ export const FaqList: React.FC<{
   onDelete?: (id: string) => void;
   loading?: boolean;
 }> = ({ items, onEdit, onDelete, loading }) => {
-  if (loading) {
+  if (loading)
     return <div className="text-xs text-zinc-400">กำลังโหลด FAQ...</div>;
-  }
-  if (!items.length) {
+  if (!items.length)
     return <div className="text-xs text-zinc-400">ยังไม่มี FAQ</div>;
-  }
+
   return (
     <div className="space-y-2">
       {items.map((f) => (
@@ -148,7 +150,9 @@ export const FaqList: React.FC<{
         >
           <div className="space-y-1 text-sm">
             <div className="font-semibold text-zinc-100">{f.question}</div>
-            <div className="text-zinc-300 text-xs whitespace-pre-line">{f.answer}</div>
+            <div className="text-zinc-300 text-xs whitespace-pre-line">
+              {f.answer}
+            </div>
             <div className="text-[11px] text-zinc-500 flex items-center gap-2">
               <span className="px-2 py-0.5 rounded bg-zinc-800 border border-zinc-700">
                 {f.enabled ? "เปิดใช้งาน" : "ปิด"}
@@ -163,6 +167,7 @@ export const FaqList: React.FC<{
           <div className="flex gap-2 text-[11px]">
             {onEdit && (
               <button
+                type="button"
                 className="px-2 py-1 rounded bg-emerald-700/40 border border-emerald-600 text-emerald-100"
                 onClick={() => onEdit(f)}
               >
@@ -171,6 +176,7 @@ export const FaqList: React.FC<{
             )}
             {onDelete && (
               <button
+                type="button"
                 className="px-2 py-1 rounded bg-red-700/30 border border-red-700 text-red-200"
                 onClick={() => onDelete(f.id)}
               >
@@ -191,8 +197,11 @@ export const EngagementList: React.FC<{
   onDelete?: (id: string) => void;
   loading?: boolean;
 }> = ({ items, onToggle, onEdit, onDelete, loading }) => {
-  if (loading) return <div className="text-xs text-zinc-400">กำลังโหลด Engagement...</div>;
-  if (!items.length) return <div className="text-xs text-zinc-400">ยังไม่มี Engagement</div>;
+  if (loading)
+    return <div className="text-xs text-zinc-400">กำลังโหลด Engagement...</div>;
+  if (!items.length)
+    return <div className="text-xs text-zinc-400">ยังไม่มี Engagement</div>;
+
   return (
     <div className="space-y-2">
       {items.map((m) => (
@@ -204,7 +213,9 @@ export const EngagementList: React.FC<{
             <div className="font-semibold text-zinc-100">
               {m.platform.toUpperCase()} • {m.channelId}
             </div>
-            <div className="text-zinc-300 text-xs whitespace-pre-line">{m.text}</div>
+            <div className="text-zinc-300 text-xs whitespace-pre-line">
+              {m.text}
+            </div>
             <div className="text-[11px] text-zinc-500 flex items-center gap-2">
               <span className="px-2 py-0.5 rounded bg-zinc-800 border border-zinc-700">
                 ทุก {m.intervalMinutes} นาที
@@ -214,9 +225,11 @@ export const EngagementList: React.FC<{
               </span>
             </div>
           </div>
+
           <div className="flex gap-2 text-[11px]">
             {onToggle && (
               <button
+                type="button"
                 className="px-2 py-1 rounded bg-indigo-700/40 border border-indigo-600 text-indigo-100"
                 onClick={() => onToggle(m, !m.enabled)}
               >
@@ -225,6 +238,7 @@ export const EngagementList: React.FC<{
             )}
             {onEdit && (
               <button
+                type="button"
                 className="px-2 py-1 rounded bg-emerald-700/40 border border-emerald-600 text-emerald-100"
                 onClick={() => onEdit(m)}
               >
@@ -233,6 +247,7 @@ export const EngagementList: React.FC<{
             )}
             {onDelete && (
               <button
+                type="button"
                 className="px-2 py-1 rounded bg-red-700/30 border border-red-700 text-red-200"
                 onClick={() => onDelete(m.id)}
               >
@@ -253,6 +268,7 @@ export const BotPreviewCard: React.FC<{
 }> = ({ platform, sampleFaq, sampleEngagement }) => {
   const hasFaq = Boolean(sampleFaq);
   const hasEng = Boolean(sampleEngagement);
+
   return (
     <div className="space-y-4">
       <div className="text-sm font-semibold text-zinc-100">ตัวอย่างข้อความ</div>
@@ -263,24 +279,34 @@ export const BotPreviewCard: React.FC<{
           </span>
           <span>ข้อความบอท</span>
         </div>
+
         {hasFaq ? (
           <div className="space-y-1">
-            <div className="font-semibold text-zinc-100">{sampleFaq?.question}</div>
-            <div className="text-zinc-200 text-sm whitespace-pre-line">{sampleFaq?.answer}</div>
+            <div className="font-semibold text-zinc-100">
+              {sampleFaq?.question}
+            </div>
+            <div className="text-zinc-200 text-sm whitespace-pre-line">
+              {sampleFaq?.answer}
+            </div>
           </div>
         ) : (
           <div className="text-zinc-500 text-sm">ยังไม่มี FAQ</div>
         )}
+
         {hasEng && (
           <div className="border-t border-zinc-800 pt-3 space-y-1">
             <div className="text-xs text-zinc-400">ข้อความ Engagement</div>
-            <div className="text-zinc-200 whitespace-pre-line">{sampleEngagement?.text}</div>
+            <div className="text-zinc-200 whitespace-pre-line">
+              {sampleEngagement?.text}
+            </div>
             <div className="text-[11px] text-zinc-500">
-              ทุก {sampleEngagement?.intervalMinutes} นาที ไปยัง {sampleEngagement?.channelId}
+              ทุก {sampleEngagement?.intervalMinutes} นาที ไปยัง{" "}
+              {sampleEngagement?.channelId}
             </div>
           </div>
         )}
       </div>
+
       <div className="text-xs text-zinc-500">
         LINE จะแสดงเป็น Flex/Quick reply, Telegram แสดงเป็น inline keyboard ได้
       </div>
@@ -293,14 +319,19 @@ const ChatCenter: React.FC = () => {
   const [selectedBotId, setSelectedBotId] = useState<string | null>(null);
 
   const [sessions, setSessions] = useState<ChatSession[]>([]);
-  const [selectedSession, setSelectedSession] =
-    useState<ChatSession | null>(null);
+  const [selectedSession, setSelectedSession] = useState<ChatSession | null>(
+    null
+  );
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [selectedConversationId, setSelectedConversationId] =
-    useState<string | null>(null);
+  const [selectedConversationId, setSelectedConversationId] = useState<
+    string | null
+  >(null);
   const [conversationPage, setConversationPage] = useState(1);
+
   const [searchTerm, setSearchTerm] = useState("");
-  const [searchResults, setSearchResults] = useState<ChatMessage[] | null>(null);
+  const [searchResults, setSearchResults] = useState<ChatMessage[] | null>(
+    null
+  );
   const [searching, setSearching] = useState(false);
 
   const [loadingBots, setLoadingBots] = useState(false);
@@ -309,30 +340,62 @@ const ChatCenter: React.FC = () => {
   const [sending, setSending] = useState(false);
 
   const [replyText, setReplyText] = useState("");
+  const [mainTab, setMainTab] = useState<MainTab>("chat");
+
+  // auto-grow reply textarea
+  const replyTaRef = useRef<HTMLTextAreaElement | null>(null);
+  useEffect(() => {
+    const el = replyTaRef.current;
+    if (!el) return;
+    el.style.height = "0px";
+    el.style.height = Math.min(el.scrollHeight, 180) + "px";
+  }, [replyText]);
+
   const [replyType, setReplyType] = useState<MessageType>("TEXT");
   const [attachmentUrl, setAttachmentUrl] = useState("");
   const [attachmentMetaInput, setAttachmentMetaInput] = useState("");
+
+  // Local upload -> backend (/api/admin/uploads) -> set attachmentUrl/meta
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [pickedFileName, setPickedFileName] = useState("");
+
   const [richPlatform, setRichPlatform] = useState<string>("line");
   const [richTitle, setRichTitle] = useState("");
   const [richBody, setRichBody] = useState("");
   const [richImageUrl, setRichImageUrl] = useState("");
   const [richAltText, setRichAltText] = useState("");
   const [richButtons, setRichButtons] = useState<
-    Array<{ label: string; action: "uri" | "message" | "postback"; value: string }>
+    Array<{
+      label: string;
+      action: "uri" | "message" | "postback";
+      value: string;
+    }>
   >([]);
   const [richInlineKeyboard, setRichInlineKeyboard] = useState<
     Array<Array<{ text: string; callbackData: string }>>
   >([]);
   const [sendingRich, setSendingRich] = useState(false);
+
   const [error, setError] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
+
   const [liveStreams, setLiveStreams] = useState<LiveStream[]>([]);
-  const [liveForm, setLiveForm] = useState({ channelId: "", title: "", description: "" });
+  const [liveForm, setLiveForm] = useState({
+    channelId: "",
+    title: "",
+    description: "",
+  });
+  const [liveQuestionText, setLiveQuestionText] = useState("");
   const [pollForm, setPollForm] = useState({ question: "", options: "" });
   const [liveTab, setLiveTab] = useState<"qna" | "polls">("qna");
   const [liveLoading, setLiveLoading] = useState(false);
 
-  const [faqForm, setFaqForm] = useState({ question: "", answer: "", keywords: "" });
+  const [faqForm, setFaqForm] = useState({
+    question: "",
+    answer: "",
+    keywords: "",
+  });
   const [editingFaqId, setEditingFaqId] = useState<string | null>(null);
   const [faqItems, setFaqItems] = useState<FaqEntry[]>([]);
 
@@ -341,13 +404,43 @@ const ChatCenter: React.FC = () => {
     intervalMinutes: 60,
     channelId: "",
   });
-  const [engagementPlatform, setEngagementPlatform] = useState<"line" | "telegram">("line");
-  const [editingEngagementId, setEditingEngagementId] = useState<string | null>(null);
-  const [engagementItems, setEngagementItems] = useState<EngagementMessage[]>([]);
+  const [engagementPlatform, setEngagementPlatform] = useState<
+    "line" | "telegram"
+  >("line");
+  const [editingEngagementId, setEditingEngagementId] = useState<string | null>(
+    null
+  );
+  const [engagementItems, setEngagementItems] = useState<EngagementMessage[]>(
+    []
+  );
   const [automationLoading, setAutomationLoading] = useState(false);
   const [automationError, setAutomationError] = useState<string | null>(null);
   const [automationEnabled, setAutomationEnabled] = useState(true);
-  const [previewPlatform, setPreviewPlatform] = useState<"line" | "telegram">("line");
+  const [previewPlatform, setPreviewPlatform] = useState<"line" | "telegram">(
+    "line"
+  );
+
+  // รูป preview overlay
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
+
+  // map รูป (LINE) ที่โหลดเป็น blob แล้ว
+  const [imgUrlMap, setImgUrlMap] = useState<Record<string, string>>({});
+  const imgUrlCreatedRef = useRef<Record<string, string>>({});
+
+  // ล้าง objectURL เก่าทุกครั้งที่เปลี่ยน session (กัน memory leak + กันรูปค้าง)
+  useEffect(() => {
+    setImgUrlMap((prev) => {
+      Object.values(prev).forEach((u) => {
+        try {
+          URL.revokeObjectURL(u);
+        } catch {
+          // ignore
+        }
+      });
+      return {};
+    });
+    imgUrlCreatedRef.current = {};
+  }, [selectedSession?.id]);
 
   const tenant = import.meta.env.VITE_TENANT || "bn9";
   const apiBase = getApiBase();
@@ -361,25 +454,35 @@ const ChatCenter: React.FC = () => {
 
   const messagesRef = useRef<HTMLDivElement | null>(null);
 
+  /* ------------------- Refs for SSE (กัน stale/closure) ------------------- */
+  const selectedBotIdRef = useRef<string | null>(null);
+  const selectedSessionIdRef = useRef<string | null>(null);
+  const mainTabRef = useRef<MainTab>("chat");
+  const [isViewingHistory, setIsViewingHistory] = useState(false);
+  const isViewingHistoryRef = useRef(false);
+  const refreshLockRef = useRef<number>(0);
+
   const fetchSessions = useCallback(
     async (botId: string, preferSessionId?: string | null) => {
       try {
         setLoadingSessions(true);
         setError(null);
+
         const data = await getChatSessions(botId, 50);
         setSessions(data);
 
-        const preferId = preferSessionId || selectedSession?.id || null;
+        const preferId =
+          preferSessionId ?? selectedSessionIdRef.current ?? null;
         const nextSession = preferId
-          ? data.find((s) => s.id === preferId) ?? data[0] ?? null
-          : data[0] ?? null;
+          ? (data.find((s) => s.id === preferId) ?? data[0] ?? null)
+          : (data[0] ?? null);
 
         setSelectedSession((prev) => {
-          if (prev?.id && nextSession?.id && prev.id === nextSession.id) {
-            return prev; // ลดการ rerender/fetch ซ้ำ
-          }
+          if (prev?.id && nextSession?.id && prev.id === nextSession.id)
+            return prev;
           return nextSession ?? null;
         });
+
         if (!nextSession) setMessages([]);
         return nextSession ?? null;
       } catch (e) {
@@ -393,64 +496,97 @@ const ChatCenter: React.FC = () => {
         setLoadingSessions(false);
       }
     },
-    [selectedSession?.id]
-  );
-
-  const fetchMessages = useCallback(async (sessionId: string) => {
-    try {
-      setLoadingMessages(true);
-      setError(null);
-      const data = await getChatMessages(sessionId, 200);
-      setMessages(data);
-      return data;
-    } catch (e) {
-      console.error(e);
-      setError("โหลดข้อความไม่สำเร็จ");
-      return [];
-    } finally {
-      setLoadingMessages(false);
-    }
-  }, []);
-
-  const loadAutomation = useCallback(
-    async (botId: string) => {
-      try {
-        setAutomationLoading(true);
-        setAutomationError(null);
-        const [faqRes, engRes] = await Promise.all([
-          getFaqEntries(botId),
-          getEngagementMessages(botId),
-        ]);
-        setFaqItems(faqRes || []);
-        setEngagementItems(engRes || []);
-      } catch (err) {
-        console.error(err);
-        setAutomationError("โหลดข้อมูลบอทไม่สำเร็จ");
-        setFaqItems([]);
-        setEngagementItems([]);
-      } finally {
-        setAutomationLoading(false);
-      }
-    },
     []
   );
 
-  /* ------------------------- โหลดรายชื่อบอททั้งหมด ------------------------- */
+  const fetchMessages = useCallback(
+    async (sessionId: string) => {
+      try {
+        setLoadingMessages(true);
+        setError(null);
 
+        const data = await getChatMessages(sessionId, 200);
+        setMessages(data.items ?? []); // ✅
+        return data.items ?? [];
+      } catch (e) {
+        console.error(e);
+        setError("โหลดข้อความไม่สำเร็จ");
+        return [];
+      } finally {
+        setLoadingMessages(false);
+      }
+    },
+    [getChatMessages]
+  ); // เพิ่มอันนี้
+
+  const loadAutomation = useCallback(async (botId: string) => {
+    try {
+      setAutomationLoading(true);
+      setAutomationError(null);
+
+      const [faqRes, engRes] = await Promise.all([
+        getFaqEntries(botId),
+        getEngagementMessages(botId),
+      ]);
+      setFaqItems(faqRes || []);
+      setEngagementItems(engRes || []);
+    } catch (err) {
+      console.error(err);
+      setAutomationError("โหลดข้อมูลบอทไม่สำเร็จ");
+      setFaqItems([]);
+      setEngagementItems([]);
+    } finally {
+      setAutomationLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    if (mainTab !== "chat") return;
+
+    const sid = selectedSession?.id;
+    if (!sid) {
+      setMessages([]);
+      return;
+    }
+
+    void fetchMessages(sid);
+  }, [selectedSession?.id, mainTab, fetchMessages]);
+
+  // 1) โหลด sessions ทุกครั้งที่เลือก bot
+  useEffect(() => {
+    if (!selectedBotId) return;
+    fetchSessions(selectedBotId, null);
+  }, [selectedBotId, fetchSessions]);
+
+  // 2) auto-select ห้องแรก ถ้ายังไม่ได้เลือกห้อง
+  useEffect(() => {
+    if (selectedSession?.id) return;
+    if (!sessions?.length) return;
+
+    setSelectedSession(sessions[0]); // หรือ setSelectedSessionId(sessions[0].id)
+  }, [sessions, selectedSession?.id, setSelectedSession]);
+
+  // 3) โหลด messages ทุกครั้งที่เปลี่ยนห้อง
+  useEffect(() => {
+    if (!selectedBotId) return;
+    if (!selectedSession?.id) return;
+
+    // ของคุณมักมีฟังก์ชัน fetchMessages(sessionId) หรือ loadConversation(...)
+    fetchMessages(selectedSession.id);
+  }, [selectedBotId, selectedSession?.id, fetchMessages]);
+
+  /* ------------------------- โหลดรายชื่อบอททั้งหมด ------------------------- */
   useEffect(() => {
     const loadBots = async () => {
       try {
         setLoadingBots(true);
         setError(null);
+
         const res = await getBots();
         const items = res.items ?? [];
         setBots(items);
-        if (items.length > 0) {
-          // เลือกบอทตัวแรกเป็น default
-          setSelectedBotId(items[0].id);
-        } else {
-          setSelectedBotId(null);
-        }
+
+        if (items.length > 0) setSelectedBotId(items[0].id);
+        else setSelectedBotId(null);
       } catch (e) {
         console.error(e);
         setError("โหลดรายชื่อบอทไม่สำเร็จ");
@@ -458,11 +594,50 @@ const ChatCenter: React.FC = () => {
         setLoadingBots(false);
       }
     };
+
     void loadBots();
   }, []);
 
-  /* -------------------- โหลด sessions ตามบอทที่เลือกอยู่ -------------------- */
+  /* ------------------------- โหลดรูป LINE เป็น blob ------------------------- */
+  useEffect(() => {
+    let cancelled = false;
 
+    const load = async () => {
+      const imageMsgs = (messages ?? []).filter((m) => {
+        const t = ((m.type as string) || (m as any).messageType || "TEXT")
+          .toString()
+          .toUpperCase();
+        return t === "IMAGE";
+      });
+
+      for (const m of imageMsgs) {
+        if (imgUrlCreatedRef.current[m.id]) continue;
+
+        try {
+          const blob = await getLineContentBlob(m.id);
+          const url = URL.createObjectURL(blob);
+
+          if (cancelled) {
+            URL.revokeObjectURL(url);
+            return;
+          }
+
+          imgUrlCreatedRef.current[m.id] = url;
+          setImgUrlMap((prev) => ({ ...prev, [m.id]: url }));
+        } catch (e) {
+          console.warn("load image blob failed", m.id, e);
+        }
+      }
+    };
+
+    void load();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [messages]);
+
+  /* -------------------- โหลด sessions ตามบอทที่เลือกอยู่ -------------------- */
   useEffect(() => {
     const loadSessions = async () => {
       if (!selectedBotId) {
@@ -480,254 +655,261 @@ const ChatCenter: React.FC = () => {
     void loadSessions();
   }, [selectedBotId, fetchSessions, loadAutomation]);
 
-  /* ------------------ โหลด messages เมื่อเปลี่ยน session ------------------ */
+  /* ------------------- SSE: รับข้อความใหม่แบบ realtime (Chat) ------------------- */
+
+  // refs สำหรับกัน useEffect rerun เพราะฟังก์ชันเปลี่ยน reference
+  const fetchSessionsRef = useRef(fetchSessions);
+  const fetchMessagesRef = useRef(fetchMessages);
+
+  // ✅ sync ref ให้ตาม state (สำคัญมาก)
+  useEffect(() => {
+    selectedBotIdRef.current = selectedBotId ?? null;
+  }, [selectedBotId]);
 
   useEffect(() => {
-    const loadMessages = async () => {
-      if (!selectedSession) {
-        setMessages([]);
+    selectedSessionIdRef.current = selectedSession?.id ?? null;
+  }, [selectedSession?.id]);
+
+  useEffect(() => {
+    isViewingHistoryRef.current = isViewingHistory;
+  }, [isViewingHistory]);
+
+  useEffect(() => {
+    mainTabRef.current = mainTab; // เช่น "chat"
+  }, [mainTab]);
+
+  useEffect(() => {
+    fetchSessionsRef.current = fetchSessions;
+    fetchMessagesRef.current = fetchMessages;
+  }, [fetchSessions, fetchMessages]);
+
+  useEffect(() => {
+    if (!ENABLE_SSE) return;
+    if (!tenant) return;
+
+    const token = localStorage.getItem("token"); // เปลี่ยน key ให้ตรงของคุณถ้าไม่ใช่ "token"
+    if (!token) return;
+
+    const base = apiBase.replace(/\/$/, "");
+    const url =
+      `${base}/live/${encodeURIComponent(tenant)}` +
+      `?token=${encodeURIComponent(token)}`;
+
+    console.log("[SSE connect url]", url);
+
+    const w = window as any;
+
+    // ปิดตัวเก่าก่อน (จะเกิดตอน tenant/apiBase เปลี่ยน)
+    try {
+      w.__CHAT_SSE__?.close?.();
+    } catch {}
+    w.__CHAT_SSE__ = null;
+
+    const es = new EventSource(url);
+    w.__CHAT_SSE__ = es;
+
+    const extractBotId = (p: any): string | null =>
+      p?.botId ??
+      p?.data?.botId ??
+      p?.message?.botId ??
+      p?.data?.message?.botId ??
+      p?.session?.botId ??
+      p?.data?.session?.botId ??
+      p?.message?.session?.botId ??
+      p?.data?.message?.session?.botId ??
+      null;
+
+    const extractSessionId = (p: any): string | null =>
+      p?.sessionId ??
+      p?.data?.sessionId ??
+      p?.message?.sessionId ??
+      p?.data?.message?.sessionId ??
+      p?.session?.id ??
+      p?.data?.session?.id ??
+      p?.message?.session?.id ??
+      p?.data?.message?.session?.id ??
+      null;
+
+    const runRefresh = async (payload: any, evType: string) => {
+      if (mainTabRef.current !== "chat") return;
+      if (isViewingHistoryRef.current) return;
+
+      // กันยิงถี่
+      const now = Date.now();
+      if (now - refreshLockRef.current < 500) return;
+      refreshLockRef.current = now;
+
+      const botIdNow = selectedBotIdRef.current;
+      if (!botIdNow) {
+        console.log("[SSE skip] no botIdNow", { botIdNow });
         return;
       }
-      await fetchMessages(selectedSession.id);
+
+      const botIdFromEvent = extractBotId(payload);
+      if (botIdFromEvent && botIdFromEvent !== botIdNow) return;
+
+      const sessionIdFromEvent = extractSessionId(payload);
+      const currentSessionId = selectedSessionIdRef.current;
+
+      // รีเฟรช list ห้องก่อน (badge/lastMessageAt)
+      const nextSession = await fetchSessionsRef.current(
+        botIdNow,
+        currentSessionId ?? undefined
+      );
+
+      // ถ้า event ระบุ sessionId และไม่ใช่ห้องที่กำลังดู => ไม่โหลด messages (กันเด้ง)
+      if (
+        sessionIdFromEvent &&
+        currentSessionId &&
+        sessionIdFromEvent !== currentSessionId
+      )
+        return;
+
+      const targetSessionId = currentSessionId || nextSession?.id || null;
+      if (targetSessionId) await fetchMessagesRef.current(targetSessionId);
+
+      console.log("[SSE refreshed]", {
+        evType,
+        botIdFromEvent,
+        sessionIdFromEvent,
+        targetSessionId,
+      });
     };
 
-    void loadMessages();
-  }, [selectedSession?.id, fetchMessages]);
+    // ✅ handler กลาง: รองรับทั้ง default message + named event
+    const handleEvent = (ev: MessageEvent) => {
+      const evName = ev.type; // ถ้ามาจาก addEventListener จะเป็นชื่อ event เช่น "user_message"
 
-  /* -------- Auto-refresh ทั้ง sessions + messages แบบเป็นช่วงเวลา -------- */
-
-  useEffect(() => {
-    if (!selectedBotId) return;
-
-    const timer = window.setInterval(async () => {
+      let outer: any = {};
       try {
-        const currentSessionId = selectedSession?.id;
-        const nextSession = await fetchSessions(
-          selectedBotId,
-          currentSessionId ?? undefined
-        );
-
-        const targetSessionId = currentSessionId || nextSession?.id;
-        if (targetSessionId) await fetchMessages(targetSessionId);
-      } catch (e) {
-        console.error("[ChatCenter poll error]", e);
-        // ไม่ต้อง setError บ่อย ๆ เดี๋ยวจอกระพริบ
+        outer = JSON.parse(ev.data || "{}");
+      } catch {
+        outer = { raw: String(ev.data ?? "") };
       }
-    }, POLL_INTERVAL_MS);
+
+      console.log("[SSE raw]", { evName, outer });
+
+      // ignore heartbeat
+      if (
+        evName === "hello" ||
+        evName === "ping" ||
+        evName === "hb" ||
+        evName === "heartbeat"
+      )
+        return;
+
+      // บาง backend ใส่ type ใน payload / บางที payload อยู่ใน outer.data
+      const evType = outer?.type || evName;
+      const payload = outer?.data ?? outer;
+
+      void runRefresh(payload, evType);
+    };
+
+    es.onopen = () => console.log("[SSE open]");
+    es.onerror = (e) => console.warn("[SSE error]", e);
+
+    // default message (จะยิงเมื่อ backend ไม่ได้ใส่ "event:" หรือใส่ event: message)
+    es.onmessage = handleEvent;
+
+    // ✅ named events (ของคุณ backend broadcast "user message" ให้ใส่ user_message แน่นอน)
+    es.addEventListener("user_message", handleEvent as any);
+
+    // ใส่เผื่อไว้ (ไม่พังถ้าไม่มี)
+    es.addEventListener("bot_message", handleEvent as any);
+    es.addEventListener("chat:message:new", handleEvent as any);
+    es.addEventListener("message:new", handleEvent as any);
 
     return () => {
-      window.clearInterval(timer);
-    };
-  }, [selectedBotId, selectedSession?.id, fetchSessions, fetchMessages]);
-
-  useEffect(() => {
-    if (selectedSession?.platform) {
-      setRichPlatform(selectedSession.platform);
-    }
-  }, [selectedSession?.platform]);
-
-  /* -------------------------- Metrics SSE monitor -------------------------- */
-
-  useEffect(() => {
-    const base = apiBase.replace(/\/$/, "");
-    const url = `${base}/metrics/stream`;
-    const es = new EventSource(url);
-
-    const handleMetrics = (ev: MessageEvent) => {
-      try {
-        const data = JSON.parse(ev.data || "{}") as MetricsSnapshot;
-        setMetrics(data);
-      } catch (err) {
-        console.warn("[ChatCenter metrics SSE parse]", err);
-      }
-    };
-
-    es.addEventListener("metrics", handleMetrics);
-
-    es.onerror = () => {
-      console.warn("[ChatCenter metrics SSE] connection error");
-    };
-
-    return () => {
-      es.removeEventListener("metrics", handleMetrics as any);
       try {
         es.close();
-      } catch (err) {
-        console.warn("[ChatCenter metrics SSE close]", err);
-      }
-    };
-  }, [apiBase]);
-
-  /* -------------------------- Live stream SSE --------------------------- */
-  const reloadLive = useCallback(async () => {
-    try {
-      setLiveLoading(true);
-      const resp = await getLiveSummary();
-      setLiveStreams(resp.streams || []);
-    } catch (err) {
-      console.warn("[ChatCenter live summary]", err);
-    } finally {
-      setLiveLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void reloadLive();
-  }, [reloadLive]);
-
-  useEffect(() => {
-    const base = apiBase.replace(/\/$/, "");
-    const url = `${base}/live/${encodeURIComponent(tenant)}`;
-    const es = new EventSource(url);
-
-    const handleStart = (ev: MessageEvent) => {
-      try {
-        const data = JSON.parse(ev.data || "{}") as { stream: LiveStream };
-        if (!data?.stream) return;
-        setLiveStreams((prev) => [data.stream, ...prev]);
-      } catch (err) {
-        console.warn("[ChatCenter live:start parse]", err);
-      }
-    };
-    const handleQna = (ev: MessageEvent) => {
-      try {
-        const data = JSON.parse(ev.data || "{}") as { question: LiveQuestion };
-        if (!data?.question) return;
-        setLiveStreams((prev) => {
-          return prev.map((s) =>
-            s.id === data.question.liveStreamId
-              ? { ...s, questions: [...(s.questions || []), data.question] }
-              : s
-          );
-        });
-      } catch (err) {
-        console.warn("[ChatCenter live:qna parse]", err);
-      }
-    };
-    const handlePoll = (ev: MessageEvent) => {
-      try {
-        const data = JSON.parse(ev.data || "{}") as { poll: LivePoll };
-        if (!data?.poll) return;
-        setLiveStreams((prev) => {
-          return prev.map((s) =>
-            s.id === data.poll.liveStreamId
-              ? { ...s, polls: [...(s.polls || []), data.poll] }
-              : s
-          );
-        });
-      } catch (err) {
-        console.warn("[ChatCenter live:poll parse]", err);
-      }
-    };
-
-    es.addEventListener("live:start", handleStart);
-    es.addEventListener("live:qna:new", handleQna);
-    es.addEventListener("live:poll:new", handlePoll);
-
-    return () => {
-      es.removeEventListener("live:start", handleStart as any);
-      es.removeEventListener("live:qna:new", handleQna as any);
-      es.removeEventListener("live:poll:new", handlePoll as any);
-      es.close();
+      } catch {}
+      if (w.__CHAT_SSE__ === es) w.__CHAT_SSE__ = null;
     };
   }, [apiBase, tenant]);
 
-  /* ------------------- SSE: รับข้อความใหม่แบบ realtime ------------------- */
-
-  useEffect(() => {
-    if (!selectedBotId) return;
-
-    const url = `${apiBase}/events?tenant=${encodeURIComponent(tenant)}`;
-    const es = new EventSource(url);
-
-    const handleNewMessage = (ev: MessageEvent) => {
-      try {
-        const payload = JSON.parse(ev.data || "{}") as any;
-        if (!payload || payload.botId !== selectedBotId) return;
-        const sessionId = payload.sessionId as string | undefined;
-
-        void (async () => {
-          const nextSession = await fetchSessions(
-            selectedBotId,
-            sessionId || selectedSession?.id || undefined
-          );
-          const targetSessionId =
-            sessionId || selectedSession?.id || nextSession?.id || null;
-          if (targetSessionId) {
-            await fetchMessages(targetSessionId);
-          }
-        })();
-      } catch (err) {
-        console.warn("[ChatCenter SSE parse error]", err);
-      }
-    };
-
-    es.addEventListener("chat:message:new", handleNewMessage);
-
-    return () => {
-      es.removeEventListener("chat:message:new", handleNewMessage as any);
-      try {
-        es.close();
-      } catch (e) {
-        console.warn("[ChatCenter SSE close warn]", e);
-      }
-    };
-  }, [selectedBotId, tenant, apiBase, fetchSessions, fetchMessages, selectedSession?.id]);
-
   /* ----------------------------- handlers ----------------------------- */
-
-  const handleSelectSession = (s: ChatSession) => {
+  function handleSelectSession(s: ChatSession) {
     setSelectedSession(s);
     setReplyText("");
     setSearchResults(null);
     setSelectedConversationId(s.id);
     setConversationPage(1);
+
+    void fetchMessages(s.id);
+  }
+  const getAuthHeaders = () => {
+    const rawToken =
+      localStorage.getItem("token") ||
+      localStorage.getItem("accessToken") ||
+      localStorage.getItem("authToken") ||
+      "";
+
+    const token =
+      rawToken && rawToken.startsWith("Bearer ")
+        ? rawToken
+        : rawToken
+          ? `Bearer ${rawToken}`
+          : "";
+
+    const tenantId =
+      localStorage.getItem("tenantId") ||
+      localStorage.getItem("x-tenant") ||
+      localStorage.getItem("tenant") ||
+      "";
+
+    const h: Record<string, string> = {};
+    if (token) h["Authorization"] = token;
+    if (tenantId) h["x-tenant"] = tenantId;
+    return h;
   };
 
   const handleSendReply = async () => {
     if (!selectedSession) return;
-    const text = replyText.trim();
-    const attUrl = attachmentUrl.trim();
 
-    if (!text && !attUrl) {
-      toast.error("กรุณาใส่ข้อความหรือแนบลิงก์ไฟล์ก่อนส่ง");
-      return;
-    }
+    const text = (replyText ?? "").trim();
+    const attUrl = (attachmentUrl ?? "").trim();
 
+    // กัน 400
+    if (!text && !attUrl) return;
+
+    // parse attachmentMeta ก่อนส่ง
     let attachmentMeta: unknown = undefined;
-    if (attachmentMetaInput.trim()) {
+    if ((attachmentMetaInput ?? "").trim()) {
       try {
         attachmentMeta = JSON.parse(attachmentMetaInput);
-      } catch (err) {
+      } catch {
         toast.error("รูปแบบ Attachment meta ต้องเป็น JSON ที่ถูกต้อง");
         return;
       }
     }
 
+    const out: any = {};
+    if (text) out.text = text;
+    if (attUrl) out.attachmentUrl = attUrl;
+    if (attachmentMeta !== undefined) out.attachmentMeta = attachmentMeta;
+
+    // type ให้สัมพันธ์กับของที่ส่ง
+    out.type = attUrl ? (replyType === "IMAGE" ? "IMAGE" : "FILE") : "TEXT";
+
     try {
       setSending(true);
       setError(null);
 
-      const res = await replyChatSession(selectedSession.id, {
-        text,
-        type: replyType,
-        attachmentUrl: attUrl || undefined,
-        attachmentMeta,
-      });
+      const res = await replyChatSession(selectedSession.id, out);
 
-      if (res.ok && res.message) {
-        // ✅ ดึงออกมาใส่ตัวแปรแยก เพื่อให้ TS เห็นว่าเป็น ChatMessage ชัวร์
-        const newMessage: ChatMessage = res.message;
-        setMessages((prev) => [...prev, newMessage]);
+      if (res?.ok) {
         toast.success("ส่งข้อความสำเร็จ");
-      } else if (!res.ok && res.error) {
-        setError(`ส่งข้อความไม่สำเร็จ: ${res.error}`);
-        toast.error("ส่งข้อความไม่สำเร็จ");
-      }
+        await fetchMessages(selectedSession.id);
 
-      setReplyText("");
-      setAttachmentUrl("");
-      setAttachmentMetaInput("");
+        setReplyText("");
+        setAttachmentUrl("");
+        setAttachmentMetaInput("");
+        setReplyType("TEXT");
+      } else {
+        const msg = res?.error ? String(res.error) : "ส่งข้อความไม่สำเร็จ";
+        setError(msg);
+        toast.error(msg);
+      }
     } catch (e) {
       console.error(e);
       setError("ส่งข้อความไม่สำเร็จ");
@@ -737,6 +919,57 @@ const ChatCenter: React.FC = () => {
     }
   };
 
+  const onPickFile = useCallback(async (file?: File) => {
+    if (!file) return;
+    try {
+      setUploading(true);
+      setPickedFileName(file.name);
+
+      const fd = new FormData();
+      fd.append("file", file);
+
+      const base = String(getApiBase() || "/api").replace(/\/$/, "");
+      const resp = await fetch(`${base}/admin/uploads`, {
+        method: "POST",
+        body: fd,
+        headers: {
+          ...getAuthHeaders(),
+        },
+      });
+
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !(data as any)?.ok || !(data as any)?.url) {
+        toast.error((data as any)?.message || "อัปโหลดไม่สำเร็จ");
+        return;
+      }
+
+      const url = String((data as any).url);
+      const mime = String((data as any).mime || file.type || "").toLowerCase();
+
+      setAttachmentUrl(url);
+      setAttachmentMetaInput(
+        JSON.stringify(
+          {
+            fileName: (data as any).fileName || file.name,
+            mime: mime || undefined,
+            size: (data as any).size || file.size || undefined,
+          },
+          null,
+          0
+        )
+      );
+
+      if (mime.startsWith("image/")) setReplyType("IMAGE");
+      else setReplyType("FILE");
+
+      toast.success("อัปโหลดไฟล์แล้ว");
+    } catch (e) {
+      console.error(e);
+      toast.error("อัปโหลดไม่สำเร็จ");
+    } finally {
+      setUploading(false);
+    }
+  }, []);
   const handleAddRichButton = () => {
     setRichButtons((prev) => [
       ...prev,
@@ -758,7 +991,10 @@ const ChatCenter: React.FC = () => {
   };
 
   const handleAddInlineRow = () => {
-    setRichInlineKeyboard((prev) => [...prev, [{ text: "ปุ่ม", callbackData: "cb" }]]);
+    setRichInlineKeyboard((prev) => [
+      ...prev,
+      [{ text: "ปุ่ม", callbackData: "cb" }],
+    ]);
   };
 
   const handleAddInlineButton = (rowIdx: number) => {
@@ -839,7 +1075,7 @@ const ChatCenter: React.FC = () => {
     }
   };
 
-  const handleKeyDownInput: React.KeyboardEventHandler<HTMLInputElement> = (
+  const handleKeyDownInput: React.KeyboardEventHandler<HTMLTextAreaElement> = (
     e
   ) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -847,6 +1083,27 @@ const ChatCenter: React.FC = () => {
       void handleSendReply();
     }
   };
+
+  const reloadLive = useCallback(async () => {
+    try {
+      setLiveLoading(true);
+      const res = await getLiveSummary();
+
+      // รองรับหลายรูปแบบผลลัพธ์ (กันพัง)
+      const streams =
+        (res as any)?.streams ??
+        (res as any)?.items ??
+        (res as any)?.data?.streams ??
+        [];
+
+      setLiveStreams(Array.isArray(streams) ? streams : []);
+    } catch (err) {
+      console.error("[reloadLive] failed", err);
+      toast.error("โหลด Live ไม่สำเร็จ");
+    } finally {
+      setLiveLoading(false);
+    }
+  }, []);
 
   const handleStartLive = async () => {
     try {
@@ -863,6 +1120,30 @@ const ChatCenter: React.FC = () => {
     }
   };
 
+  const handleSubmitLiveQuestion = async () => {
+    const active = liveStreams[0];
+    if (!active) {
+      toast.error("ยังไม่มี Live stream");
+      return;
+    }
+    if (!liveQuestionText.trim()) {
+      toast.error("พิมพ์คำถามก่อน");
+      return;
+    }
+    try {
+      await submitLiveQuestion({
+        liveStreamId: active.id,
+        channelId: active.channelId,
+        text: liveQuestionText.trim(),
+      } as any);
+      toast.success("ส่งคำถามแล้ว");
+      setLiveQuestionText("");
+    } catch (err) {
+      console.error(err);
+      toast.error("ส่งคำถามไม่สำเร็จ");
+    }
+  };
+
   const handleCreatePoll = async () => {
     const active = liveStreams[0];
     if (!active) {
@@ -873,10 +1154,12 @@ const ChatCenter: React.FC = () => {
       .split(",")
       .map((o) => o.trim())
       .filter(Boolean);
+
     if (opts.length < 2) {
       toast.error("ระบุตัวเลือกอย่างน้อย 2 ตัว");
       return;
     }
+
     try {
       await createLivePoll({
         liveStreamId: active.id,
@@ -892,36 +1175,44 @@ const ChatCenter: React.FC = () => {
     }
   };
 
+  // ===== SEARCH =====
   const handleSearchSubmit: React.FormEventHandler<HTMLFormElement> = async (
     e
   ) => {
     e.preventDefault();
+
     const q = searchTerm.trim();
     if (!q) {
       setSearchResults(null);
-      if (selectedSession) {
-        await fetchMessages(selectedSession.id);
-      }
+      if (selectedSession) await fetchMessages(selectedSession.id);
       return;
     }
 
     try {
       setSearching(true);
-      const items = await searchChatMessages({
+
+      const res = await searchChatMessages({
         q,
         botId: selectedBotId,
         limit: 200,
       });
+      const items = Array.isArray(res) ? res : res.items;
+
       setSearchResults(items);
-      toast.success(`พบ ${items.length} ข้อความที่ตรงกับคำค้นหา`);
+
+      if (!Array.isArray(res) && res.conversationId) {
+        setSelectedConversationId(res.conversationId);
+        setConversationPage(1);
+      }
     } catch (err) {
-      console.error("search error", err);
-      toast.error("ค้นหาข้อความไม่สำเร็จ");
+      console.error(err);
+      toast.error("ค้นหาไม่สำเร็จ");
     } finally {
       setSearching(false);
     }
   };
 
+  // ===== FAQ =====
   const resetFaqForm = () => {
     setFaqForm({ question: "", answer: "", keywords: "" });
     setEditingFaqId(null);
@@ -936,8 +1227,10 @@ const ChatCenter: React.FC = () => {
       toast.error("กรอกคำถามและคำตอบให้ครบ");
       return;
     }
+
     try {
       setAutomationLoading(true);
+
       const payload = {
         botId: selectedBotId,
         question: faqForm.question.trim(),
@@ -949,15 +1242,19 @@ const ChatCenter: React.FC = () => {
               .filter(Boolean)
           : [],
       };
+
       if (editingFaqId) {
         const updated = await updateFaqEntry(editingFaqId, payload);
-        setFaqItems((prev) => prev.map((f) => (f.id === updated.id ? updated : f)));
+        setFaqItems((prev) =>
+          prev.map((f) => (f.id === updated.id ? updated : f))
+        );
         toast.success("อัปเดต FAQ แล้ว");
       } else {
         const created = await createFaqEntry(payload);
         setFaqItems((prev) => [created, ...prev]);
         toast.success("เพิ่ม FAQ แล้ว");
       }
+
       resetFaqForm();
     } catch (err) {
       console.error(err);
@@ -987,8 +1284,10 @@ const ChatCenter: React.FC = () => {
       toast.error("กรอกข้อความและ channel ให้ครบ");
       return;
     }
+
     try {
       setAutomationLoading(true);
+
       const payload = {
         botId: selectedBotId,
         platform: engagementPlatform,
@@ -997,8 +1296,12 @@ const ChatCenter: React.FC = () => {
         intervalMinutes: Number(engagementForm.intervalMinutes) || 60,
         enabled: automationEnabled,
       };
+
       if (editingEngagementId) {
-        const updated = await updateEngagementMessage(editingEngagementId, payload);
+        const updated = await updateEngagementMessage(
+          editingEngagementId,
+          payload
+        );
         setEngagementItems((prev) =>
           prev.map((m) => (m.id === updated.id ? { ...m, ...updated } : m))
         );
@@ -1008,6 +1311,7 @@ const ChatCenter: React.FC = () => {
         setEngagementItems((prev) => [created, ...prev]);
         toast.success("เพิ่ม Engagement แล้ว");
       }
+
       setEngagementForm({ text: "", intervalMinutes: 60, channelId: "" });
       setEditingEngagementId(null);
     } catch (err) {
@@ -1051,31 +1355,26 @@ const ChatCenter: React.FC = () => {
   const handleClearSearch = async () => {
     setSearchTerm("");
     setSearchResults(null);
-    if (selectedSession) {
-      await fetchMessages(selectedSession.id);
-    }
+    if (selectedSession) await fetchMessages(selectedSession.id);
   };
 
   const currentBot = bots.find((b) => b.id === selectedBotId) || null;
-
   /* ------------------------- filter ห้องแชทตาม query + platform ------------------------- */
-
   const filteredSessions = useMemo(() => {
     const q = sessionQuery.trim().toLowerCase();
+
     return sessions.filter((s) => {
-      // filter platform
       const plat = (s.platform || "").toLowerCase();
+
       if (platformFilter !== "all") {
         if (platformFilter === "other") {
-          if (["line", "telegram", "facebook", "webchat"].includes(plat)) {
+          if (["line", "telegram", "facebook", "webchat"].includes(plat))
             return false;
-          }
         } else if (plat !== platformFilter) {
           return false;
         }
       }
 
-      // filter text
       if (!q) return true;
       const name = (s.displayName || "").toLowerCase();
       const uid = (s.userId || "").toLowerCase();
@@ -1087,15 +1386,17 @@ const ChatCenter: React.FC = () => {
     () =>
       (searchResults ?? messages).map((m) => ({
         ...m,
-        conversationId: m.conversationId || m.sessionId,
+        conversationId: (m as any).conversationId || (m as any).sessionId,
       })),
     [messages, searchResults]
   );
 
   const conversationGroups = useMemo<ConversationGroup[]>(() => {
     const map = new Map<string, ChatMessage[]>();
+
     for (const m of normalizedMessages) {
-      const cid = m.conversationId || m.sessionId || "unknown";
+      const cid =
+        (m as any).conversationId || (m as any).sessionId || "unknown";
       const prev = map.get(cid) ?? [];
       prev.push(m);
       map.set(cid, prev);
@@ -1103,43 +1404,54 @@ const ChatCenter: React.FC = () => {
 
     const groups = Array.from(map.entries()).map(([conversationId, msgs]) => {
       const sorted = [...msgs].sort(
-        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+        (a, b) =>
+          new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
       );
       const latest = sorted[sorted.length - 1];
+
       return {
         conversationId,
         messages: sorted,
         latestAt: latest ? new Date(latest.createdAt).getTime() : 0,
-        session: latest?.session,
-        platform: latest?.platform ?? latest?.session?.platform ?? null,
-        botId: latest?.botId ?? latest?.session?.botId ?? null,
-        displayName: latest?.session?.displayName ?? undefined,
-        userId: latest?.session?.userId ?? undefined,
+        session: (latest as any)?.session,
+        platform:
+          (latest as any)?.platform ??
+          (latest as any)?.session?.platform ??
+          null,
+        botId:
+          (latest as any)?.botId ?? (latest as any)?.session?.botId ?? null,
+        displayName: (latest as any)?.session?.displayName ?? undefined,
+        userId: (latest as any)?.session?.userId ?? undefined,
       };
     });
 
     return groups.sort((a, b) => b.latestAt - a.latestAt);
   }, [normalizedMessages]);
 
+  // สำคัญ: ห้าม reset page ทุกครั้งที่ messages เปลี่ยน (นี่คือสาเหตุ "เด้งกลับ")
   useEffect(() => {
     if (conversationGroups.length === 0) {
       setSelectedConversationId(null);
       setConversationPage(1);
       return;
     }
-    setSelectedConversationId((prev) => {
-      if (prev && conversationGroups.some((c) => c.conversationId === prev)) {
-        return prev;
-      }
-      return conversationGroups[0]?.conversationId ?? null;
-    });
+
+    const prev = selectedConversationId;
+    const hasPrev =
+      prev && conversationGroups.some((c) => c.conversationId === prev);
+    if (hasPrev) return;
+
+    const nextId = conversationGroups[0]?.conversationId ?? null;
+    setSelectedConversationId(nextId);
     setConversationPage(1);
-  }, [conversationGroups]);
+  }, [conversationGroups, selectedConversationId]);
 
   const activeConversation = useMemo(() => {
     if (!selectedConversationId) return conversationGroups[0] ?? null;
     return (
-      conversationGroups.find((c) => c.conversationId === selectedConversationId) ??
+      conversationGroups.find(
+        (c) => c.conversationId === selectedConversationId
+      ) ??
       conversationGroups[0] ??
       null
     );
@@ -1147,56 +1459,59 @@ const ChatCenter: React.FC = () => {
 
   const totalPages = useMemo(() => {
     if (!activeConversation) return 1;
-    return Math.max(1, Math.ceil(activeConversation.messages.length / PAGE_SIZE));
+    return Math.max(
+      1,
+      Math.ceil(activeConversation.messages.length / PAGE_SIZE)
+    );
   }, [activeConversation]);
 
   useEffect(() => {
-    setConversationPage((prev) => {
-      if (prev > totalPages) return totalPages;
-      return prev;
-    });
+    setConversationPage((prev) => (prev > totalPages ? totalPages : prev));
   }, [totalPages]);
 
   const pagedMessages = useMemo(() => {
     if (!activeConversation) return [] as ChatMessage[];
-    const start = (conversationPage - 1) * PAGE_SIZE;
-    return activeConversation.messages.slice(start, start + PAGE_SIZE);
-  }, [activeConversation, conversationPage]);
 
-  /* ------------------------- group messages by day ------------------------- */
+    const list = activeConversation.messages; // list นี้ถูก sort ASC อยู่แล้ว
+    const total = list.length;
+
+    // หน้า 1 = ตัดจากท้ายสุด (ล่าสุด)
+    const end = total - (conversationPage - 1) * PAGE_SIZE;
+    const start = Math.max(0, end - PAGE_SIZE);
+
+    return list.slice(start, Math.max(0, end));
+  }, [activeConversation, conversationPage]);
 
   const messagesWithDateHeader = useMemo(() => {
     const result: Array<
       ChatMessage & { _showDateHeader?: boolean; _dateLabel?: string }
     > = [];
     let lastDateKey = "";
+
     for (const m of pagedMessages) {
       const d = new Date(m.createdAt);
-      const dateKey = d.toISOString().slice(0, 10); // YYYY-MM-DD
-      let show = false;
-      let label = "";
-      if (dateKey !== lastDateKey) {
-        show = true;
-        lastDateKey = dateKey;
-        label = d.toLocaleDateString();
-      }
-      result.push({ ...m, _showDateHeader: show, _dateLabel: label });
+      const dateKey = d.toISOString().slice(0, 10);
+      const show = dateKey !== lastDateKey;
+
+      if (show) lastDateKey = dateKey;
+      result.push({
+        ...(m as any),
+        _showDateHeader: show,
+        _dateLabel: show ? d.toLocaleDateString() : "",
+      });
     }
+
     return result;
   }, [pagedMessages]);
 
-  /* ---------------- scroll ลงล่างเมื่อมีข้อความใหม่ ---------------- */
-
   useEffect(() => {
-    if (messagesRef.current) {
-      messagesRef.current.scrollTo({
-        top: messagesRef.current.scrollHeight,
-        behavior: "smooth",
-      });
-    }
+    if (!messagesRef.current) return;
+    if (conversationPage !== 1) return; // เพิ่มบรรทัดนี้
+    messagesRef.current.scrollTo({
+      top: messagesRef.current.scrollHeight,
+      behavior: "smooth",
+    });
   }, [pagedMessages.length, selectedConversationId, conversationPage]);
-
-  /* ------------------------- helper แปลง platform เป็น label ------------------------- */
 
   const conversationLabel = (c: ConversationGroup) =>
     c.displayName || c.userId || c.conversationId;
@@ -1223,7 +1538,6 @@ const ChatCenter: React.FC = () => {
   const selectedSessionIntentCode = selectedSession
     ? getSessionIntentCode(selectedSession)
     : null;
-
   const isSearchMode = Boolean(searchResults);
 
   const channelMetrics = useMemo(
@@ -1239,30 +1553,40 @@ const ChatCenter: React.FC = () => {
       })),
     [channelMetrics]
   );
-  const maxChannelSent = useMemo(() => {
-    return channelMetrics.reduce((acc, [, v]) => Math.max(acc, v.sent || 0), 1);
-  }, [channelMetrics]);
 
   const previewFaq = useMemo(() => faqItems[0] ?? null, [faqItems]);
   const previewEngagement = useMemo(
     () => engagementItems.find((m) => m.enabled) ?? engagementItems[0] ?? null,
     [engagementItems]
   );
-  const botLogs = useMemo(
-    () =>
-      (messages || [])
-        .filter((m) => m.senderType === "bot")
-        .slice(-8)
-        .reverse(),
-    [messages]
-  );
 
   /* ------------------------------ UI หลัก ------------------------------ */
 
+  const TabButton: React.FC<{ id: MainTab; label: string }> = ({
+    id,
+    label,
+  }) => {
+    const active = mainTab === id;
+    return (
+      <button
+        type="button"
+        onClick={() => setMainTab(id)}
+        aria-label={`เปิดแท็บ ${label}`}
+        className={`px-3 py-2 rounded-lg border text-xs transition ${
+          active
+            ? "border-emerald-500/70 bg-emerald-500/10 text-emerald-100"
+            : "border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-800/60"
+        }`}
+      >
+        {label}
+      </button>
+    );
+  };
+
   return (
-    <div className="flex flex-col h-[70vh] min-h-0 gap-3">
-      {/* แถบด้านบน: เลือกบอท */}
-      <div className="flex items-center justify-between">
+    <div className="flex flex-col min-h-[80vh] gap-3">
+      {/* แถบด้านบน */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
           <h1 className="text-lg font-semibold">Chat Center</h1>
           <span className="text-xs text-zinc-400">
@@ -1289,9 +1613,7 @@ const ChatCenter: React.FC = () => {
               <option value="facebook">
                 {platformFilterLabel("facebook")}
               </option>
-              <option value="webchat">
-                {platformFilterLabel("webchat")}
-              </option>
+              <option value="webchat">{platformFilterLabel("webchat")}</option>
               <option value="other">{platformFilterLabel("other")}</option>
             </select>
           </div>
@@ -1322,1217 +1644,1273 @@ const ChatCenter: React.FC = () => {
         </div>
       </div>
 
-      {/* Metrics overview */}
-      <div className="grid gap-3 md:grid-cols-3">
-        <div className="bg-[#14171a] border border-zinc-800 rounded-xl p-4">
-          <div className="text-xs text-zinc-400 mb-1">Deliveries</div>
-          <div className="text-2xl font-semibold text-emerald-300">
-            {metrics?.deliveryTotal ?? 0}
-          </div>
-          <div className="text-[11px] text-zinc-500 mt-1">
-            realtime via SSE (/metrics/stream)
-          </div>
-        </div>
-        <div className="bg-[#14171a] border border-zinc-800 rounded-xl p-4">
-          <div className="text-xs text-zinc-400 mb-1">Errors</div>
-          <div className="text-2xl font-semibold text-rose-300">
-            {metrics?.errorTotal ?? 0}
-          </div>
-          <div className="text-[11px] text-zinc-500 mt-1">
-            รวมข้อผิดพลาดจากการส่งข้อความ
-          </div>
-        </div>
-        <div className="bg-[#14171a] border border-zinc-800 rounded-xl p-4">
-          <div className="text-xs text-zinc-400 mb-1">Last update</div>
-          <div className="text-lg font-semibold text-zinc-100">
-            {metrics?.updatedAt
-              ? new Date(metrics.updatedAt).toLocaleTimeString()
-              : "-"}
-          </div>
-          <div className="text-[11px] text-zinc-500 mt-1">
-            base: {apiBase.replace(/https?:\/\//, "")}
-          </div>
-        </div>
+      {/* แถบแท็บ */}
+      <div className="flex gap-2 flex-wrap">
+        <TabButton id="chat" label="Chat" />
+        <TabButton id="automation" label="Automation" />
+        <TabButton id="live" label="Live" />
+        <TabButton id="rich" label="Rich" />
+        <TabButton id="metrics" label="Metrics" />
       </div>
 
-      {/* Live Stream Control */}
-      <div className="grid md:grid-cols-2 gap-3">
-        <div className="bg-[#14171a] border border-zinc-800 rounded-xl p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="font-semibold text-sm text-zinc-100">Telegram Live Stream</div>
-              <div className="text-[11px] text-zinc-500">ควบคุม Live ในช่อง Telegram + Q&A/Poll</div>
-            </div>
-            {liveLoading && <span className="text-xs text-zinc-400">กำลังโหลด...</span>}
-          </div>
-          <div className="grid md:grid-cols-2 gap-2 text-xs">
-            <input
-              className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1"
-              placeholder="Channel ID"
-              value={liveForm.channelId}
-              onChange={(e) => setLiveForm((p) => ({ ...p, channelId: e.target.value }))}
-            />
-            <input
-              className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1"
-              placeholder="Title"
-              value={liveForm.title}
-              onChange={(e) => setLiveForm((p) => ({ ...p, title: e.target.value }))}
-            />
-            <input
-              className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 md:col-span-2"
-              placeholder="Description"
-              value={liveForm.description}
-              onChange={(e) => setLiveForm((p) => ({ ...p, description: e.target.value }))}
-            />
-          </div>
-          <div className="flex gap-2">
-            <button
-              className="px-3 py-2 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-500"
-              type="button"
-              onClick={handleStartLive}
-            >
-              เริ่ม Live
-            </button>
-            <button
-              className="px-3 py-2 rounded bg-zinc-800 text-zinc-200 text-xs border border-zinc-700"
-              type="button"
-              onClick={() => void reloadLive()}
-            >
-              รีเฟรช
-            </button>
-          </div>
-          <div className="border border-zinc-800 rounded-lg p-3 bg-black/30 text-xs space-y-2">
-            <div className="flex items-center justify-between">
-              <div className="font-semibold">สตรีมล่าสุด</div>
-              <div className="flex gap-2 text-[10px]">
-                <button
-                  className={`px-2 py-1 rounded ${liveTab === "qna" ? "bg-emerald-600 text-white" : "bg-zinc-800 text-zinc-200"}`}
-                  onClick={() => setLiveTab("qna")}
-                >
-                  Q&A
-                </button>
-                <button
-                  className={`px-2 py-1 rounded ${liveTab === "polls" ? "bg-emerald-600 text-white" : "bg-zinc-800 text-zinc-200"}`}
-                  onClick={() => setLiveTab("polls")}
-                >
-                  Polls
-                </button>
+      {error && (
+        <div className="px-4 py-2 text-xs text-red-400 border border-zinc-800 rounded-lg bg-zinc-900/40">
+          {error}
+        </div>
+      )}
+
+      {/* ========================= TAB: CHAT ========================= */}
+      {mainTab === "chat" && (
+        <div className="flex flex-1 gap-4 min-h-0">
+          {/* ซ้าย: รายการห้องแชท */}
+          <div className="w-80 border border-zinc-700 rounded-xl bg-zinc-900/60 flex flex-col min-h-0">
+            <div className="px-4 py-3 border-b border-zinc-800 flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <div className="font-semibold text-sm">Chat Sessions</div>
+                <span className="text-xs text-zinc-400">
+                  bot: {currentBot ? currentBot.name || currentBot.id : "-"}
+                </span>
               </div>
+
+              <input
+                type="text"
+                aria-label="ค้นหาห้องแชท"
+                className="w-full bg-zinc-950/70 border border-zinc-700 rounded-lg px-2 py-1 text-xs text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                placeholder="ค้นหาชื่อลูกค้า หรือ userId..."
+                value={sessionQuery}
+                onChange={(e) => setSessionQuery(e.target.value)}
+              />
             </div>
-            {liveStreams.length === 0 ? (
-              <div className="text-zinc-400">ยังไม่มี Live stream</div>
+
+            {loadingSessions ? (
+              <div className="p-4 text-sm text-zinc-400">กำลังโหลด...</div>
+            ) : !selectedBotId ? (
+              <div className="p-4 text-sm text-zinc-400">
+                กรุณาเลือกบอทเพื่อดูห้องแชท
+              </div>
+            ) : filteredSessions.length === 0 ? (
+              <div className="p-4 text-sm text-zinc-400">
+                ไม่พบห้องแชทที่ตรงกับเงื่อนไข
+              </div>
             ) : (
-              <div className="space-y-2">
-                {liveStreams.map((s) => (
-                  <div key={s.id} className="p-2 rounded border border-zinc-800 bg-zinc-900/70">
-                    <div className="flex items-center justify-between text-xs">
-                      <div className="font-semibold text-zinc-100">{s.title}</div>
-                      <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-700/30 border border-emerald-700 text-emerald-200">
-                        {s.status}
-                      </span>
-                    </div>
-                    <div className="text-[11px] text-zinc-400">Channel: {s.channelId}</div>
-                    {liveTab === "qna" ? (
-                      <div className="space-y-1 mt-1">
-                        {(s.questions || []).slice(-5).map((q) => (
-                          <div key={q.id} className="text-[11px] text-zinc-200 flex items-center gap-2">
-                            <span className="px-2 py-0.5 rounded bg-sky-700/30 text-sky-100">Q</span>
-                            <span>{q.question}</span>
-                          </div>
-                        ))}
-                        {(s.questions || []).length === 0 && (
-                          <div className="text-zinc-500 text-[11px]">ยังไม่มีคำถาม</div>
+              <div className="flex-1 overflow-y-auto">
+                {filteredSessions.map((s) => {
+                  const isActive = selectedSession?.id === s.id;
+                  const intentCode = getSessionIntentCode(s);
+
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => handleSelectSession(s)}
+                      className={`w-full text-left px-4 py-3 border-b border-zinc-800 text-sm hover:bg-zinc-800/60 ${
+                        isActive ? "bg-zinc-800/80" : ""
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="font-medium truncate">
+                          {s.displayName || s.userId}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <IntentBadge code={intentCode} />
+                          <span className="px-2 py-0.5 rounded-full text-[10px] bg-zinc-800 text-zinc-200">
+                            {platformLabel(s.platform)}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="mt-1 text-[11px] text-zinc-400">
+                        {new Date(s.lastMessageAt).toLocaleString()}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* ขวา: ข้อความในห้อง */}
+          <div className="flex-1 border border-zinc-700 rounded-xl bg-zinc-900/60 flex flex-col min-h-0">
+            <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex flex-col gap-1 min-w-[200px]">
+                <div className="font-semibold text-sm">
+                  {isSearchMode
+                    ? `ผลการค้นหา (${searchResults?.length ?? 0})`
+                    : selectedSession
+                      ? selectedSession.displayName || selectedSession.userId
+                      : "ไม่มีห้องแชทที่เลือก"}
+                </div>
+
+                {!isSearchMode && selectedSession && (
+                  <div className="flex items-center gap-2 text-xs text-zinc-400">
+                    <span>
+                      platform: {platformLabel(selectedSession.platform)}
+                    </span>
+                    <IntentBadge code={selectedSessionIntentCode} />
+                  </div>
+                )}
+              </div>
+
+              <form
+                onSubmit={handleSearchSubmit}
+                className="flex items-center gap-2 text-xs"
+              >
+                <input
+                  aria-label="ค้นหาข้อความ"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  placeholder="ค้นหาข้อความ..."
+                  className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1 text-xs text-zinc-100 w-56"
+                />
+                <button
+                  type="submit"
+                  disabled={searching}
+                  className="px-3 py-1 rounded-lg bg-emerald-600 text-white text-xs disabled:opacity-60"
+                >
+                  {searching ? "ค้นหา..." : "ค้นหา"}
+                </button>
+
+                {isSearchMode && (
+                  <button
+                    type="button"
+                    onClick={() => void handleClearSearch()}
+                    className="px-3 py-1 rounded-lg bg-zinc-800 text-zinc-200 text-xs"
+                  >
+                    ล้างคำค้น
+                  </button>
+                )}
+              </form>
+            </div>
+
+            <div className="px-4 py-3 border-b border-zinc-800 bg-black/10 flex flex-col gap-2">
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 text-xs text-zinc-300">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-zinc-400">สนทนา:</span>
+                  {activeConversation ? (
+                    <span className="font-medium">
+                      {conversationLabel(activeConversation)}
+                    </span>
+                  ) : (
+                    <span className="text-zinc-500">-</span>
+                  )}
+                  {activeConversation?.platform && (
+                    <span className="px-2 py-0.5 rounded-full bg-zinc-800 border border-zinc-700 text-[11px]">
+                      {platformLabel(activeConversation.platform)}
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-zinc-400">
+                    หน้า {conversationPage} / {totalPages}
+                  </span>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setConversationPage((p) => Math.max(1, p - 1))
+                      }
+                      disabled={conversationPage <= 1}
+                      className="px-2 py-1 rounded border border-zinc-700 text-zinc-200 text-[11px] disabled:opacity-50"
+                    >
+                      ก่อนหน้า
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setConversationPage((p) => Math.min(totalPages, p + 1))
+                      }
+                      disabled={conversationPage >= totalPages}
+                      className="px-2 py-1 rounded border border-zinc-700 text-zinc-200 text-[11px] disabled:opacity-50"
+                    >
+                      ถัดไป
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex gap-2 overflow-x-auto pt-1">
+                {conversationGroups.length === 0 && (
+                  <span className="text-[11px] text-zinc-500">
+                    ไม่มีข้อความ
+                  </span>
+                )}
+
+                {conversationGroups.map((c) => {
+                  const isActive = c.conversationId === selectedConversationId;
+
+                  return (
+                    <button
+                      key={c.conversationId}
+                      type="button"
+                      onClick={() => {
+                        setSelectedConversationId(c.conversationId);
+                        setConversationPage(1);
+                      }}
+                      className={`px-3 py-2 rounded-lg border text-left text-[11px] min-w-[180px] transition ${
+                        isActive
+                          ? "border-emerald-500/70 bg-emerald-500/10 text-emerald-100"
+                          : "border-zinc-700 bg-zinc-900 text-zinc-200"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-xs">
+                          {conversationLabel(c)}
+                        </span>
+                        {c.platform && (
+                          <span className="px-2 py-0.5 rounded-full bg-black/30 border border-white/10 text-[10px]">
+                            {platformLabel(c.platform)}
+                          </span>
                         )}
+                      </div>
+                      <div className="text-[10px] text-zinc-400 mt-1">
+                        {c.messages.length} ข้อความ
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {isViewingHistory && (
+                <div className="text-[11px] text-amber-300/90">
+                  โหมดอ่านย้อนหลัง: ระบบจะหยุดรีเฟรชอัตโนมัติชั่วคราว
+                  (กันเด้งกลับ)
+                </div>
+              )}
+            </div>
+
+            <div
+              ref={messagesRef}
+              className="flex-1 overflow-y-auto px-4 py-3 space-y-2 text-sm min-h-0"
+            >
+              {loadingMessages && !isSearchMode && (
+                <div className="text-zinc-400 text-xs">กำลังโหลดข้อความ...</div>
+              )}
+
+              {!loadingMessages &&
+                !isSearchMode &&
+                selectedSession &&
+                (!activeConversation ||
+                  activeConversation.messages.length === 0) && (
+                  <div className="text-zinc-400 text-xs">
+                    ยังไม่มีข้อความในห้องนี้
+                  </div>
+                )}
+
+              {!isSearchMode && !selectedSession && (
+                <div className="text-zinc-500 text-xs">
+                  กรุณาเลือกลูกค้าจากด้านซ้ายเพื่อดูประวัติแชท
+                </div>
+              )}
+
+              {isSearchMode && searchResults && searchResults.length === 0 && (
+                <div className="text-zinc-400 text-xs">
+                  ไม่พบข้อความที่ตรงกับคำค้นหา
+                </div>
+              )}
+
+              {messagesWithDateHeader.map((m: any) => {
+                const isBot = m.senderType === "bot";
+                const isAdmin = m.senderType === "admin";
+
+                let align = "justify-start";
+                let bubble = "bg-zinc-800 text-zinc-50";
+
+                if (isBot) {
+                  align = "justify-end";
+                  bubble = "bg-emerald-600 text-white";
+                } else if (isAdmin) {
+                  align = "justify-end";
+                  bubble = "bg-blue-600 text-white";
+                }
+
+                const msgTypeRaw =
+                  (m.type as string) || (m as any).messageType || "TEXT";
+                const msgType = msgTypeRaw.toString().toUpperCase();
+
+                const plat = (
+                  m.platform ||
+                  m.session?.platform ||
+                  selectedSession?.platform ||
+                  ""
+                )
+                  .toString()
+                  .toLowerCase();
+
+                let content: React.ReactNode = null;
+
+                if (msgType === "TEXT") {
+                  content = m.text || "";
+                } else if (msgType === "IMAGE") {
+                  if (plat === "line") {
+                    const imageUrl = imgUrlMap[m.id];
+
+                    content = (
+                      <div className="space-y-2">
+                        {m.text && (
+                          <div className="whitespace-pre-line">{m.text}</div>
+                        )}
+
+                        {!imageUrl ? (
+                          <div className="text-[11px] text-zinc-400">
+                            กำลังโหลดรูป...
+                          </div>
+                        ) : (
+                          <>
+                            <div
+                              className="inline-block max-w-[180px] cursor-pointer"
+                              onClick={() => setPreviewImage(imageUrl)}
+                              role="button"
+                              aria-label="เปิดดูรูปแบบขยาย"
+                              tabIndex={0}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ")
+                                  setPreviewImage(imageUrl);
+                              }}
+                            >
+                              <img
+                                src={imageUrl}
+                                alt="attachment"
+                                className="w-full max-h-40 object-cover rounded-lg border border-white/10"
+                              />
+                            </div>
+                            <div className="text-[10px] text-zinc-400">
+                              แตะที่รูปเพื่อขยาย
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    );
+                  } else {
+                    const imageUrl = m.attachmentUrl || "";
+                    content = imageUrl ? (
+                      <div
+                        className="inline-block max-w-[180px] cursor-pointer"
+                        onClick={() => setPreviewImage(imageUrl)}
+                        role="button"
+                        aria-label="เปิดดูรูปแบบขยาย"
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ")
+                            setPreviewImage(imageUrl);
+                        }}
+                      >
+                        <img
+                          src={imageUrl}
+                          alt="attachment"
+                          className="w-full max-h-40 object-cover rounded-lg border border-white/10"
+                        />
                       </div>
                     ) : (
-                      <div className="space-y-2 mt-1">
-                        {(s.polls || []).slice(-3).map((p) => (
-                          <div key={p.id} className="text-[11px] text-zinc-200 space-y-1">
-                            <div className="font-semibold">{p.question}</div>
-                            <div className="flex flex-wrap gap-1">
-                              {Array.isArray(p.options)
-                                ? (p.options as string[]).map((opt, idx) => (
-                                    <span
-                                      key={`${p.id}-${idx}`}
-                                      className="px-2 py-0.5 rounded bg-zinc-800 border border-zinc-700"
-                                    >
-                                      {opt}
-                                    </span>
-                                  ))
-                                : null}
-                            </div>
-                          </div>
-                        ))}
-                        {(s.polls || []).length === 0 && (
-                          <div className="text-zinc-500 text-[11px]">ยังไม่มี Poll</div>
-                        )}
+                      <div className="text-[11px] text-zinc-400">
+                        ไม่มีลิงก์รูป
+                      </div>
+                    );
+                  }
+                } else if (msgType === "FILE") {
+                  const fileName =
+                    (m.attachmentMeta as any)?.fileName || "ไฟล์แนบ";
+                  content = (
+                    <div className="space-y-1">
+                      {m.text && (
+                        <div className="whitespace-pre-line">{m.text}</div>
+                      )}
+                      <a
+                        href={m.attachmentUrl || "#"}
+                        target={m.attachmentUrl ? "_blank" : undefined}
+                        rel="noreferrer"
+                        className="underline text-emerald-200"
+                      >
+                        {fileName}
+                      </a>
+                    </div>
+                  );
+                } else {
+                  content = (
+                    <div className="space-y-1">
+                      {m.text && (
+                        <div className="whitespace-pre-line">{m.text}</div>
+                      )}
+                      <span className="px-2 py-1 rounded bg-black/30 border border-white/10 text-[11px]">
+                        {msgType || "MESSAGE"}
+                      </span>
+                    </div>
+                  );
+                }
+
+                const msgIntentCode = getMessageIntentCode(m);
+                const msgIntentLabel = intentCodeToLabel(msgIntentCode);
+
+                const messagePlatform = platformLabel(
+                  m.platform || m.session?.platform || selectedSession?.platform
+                );
+
+                const sessionLabel = isSearchMode
+                  ? m.session?.displayName ||
+                    m.session?.userId ||
+                    m.session?.id ||
+                    ""
+                  : null;
+
+                return (
+                  <React.Fragment key={m.id}>
+                    {m._showDateHeader && m._dateLabel && (
+                      <div className="flex justify-center my-2">
+                        <span className="px-3 py-1 rounded-full bg-zinc-800 text-[10px] text-zinc-300">
+                          {m._dateLabel}
+                        </span>
                       </div>
                     )}
+
+                    <div className={`flex ${align} gap-2 items-end text-sm`}>
+                      <div className="max-w-[70%] flex flex-col gap-1">
+                        {sessionLabel && (
+                          <div className="text-[11px] text-zinc-400">
+                            {sessionLabel}{" "}
+                            {messagePlatform ? `(${messagePlatform})` : ""}
+                          </div>
+                        )}
+
+                        <div
+                          className={`px-3 py-2 rounded-2xl ${bubble} whitespace-pre-line`}
+                        >
+                          {content}
+
+                          {m.senderType === "user" && msgIntentLabel && (
+                            <div className="mt-1 text-[10px] opacity-80">
+                              หมวด: {msgIntentLabel}
+                            </div>
+                          )}
+
+                          <div className="mt-1 text-[10px] opacity-70 flex items-center justify-between gap-2">
+                            {messagePlatform && (
+                              <span className="px-2 py-0.5 rounded-full bg-black/20 border border-white/10">
+                                {messagePlatform}
+                              </span>
+                            )}
+                            <span className="ml-auto text-right">
+                              {new Date(m.createdAt).toLocaleTimeString()}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </React.Fragment>
+                );
+              })}
+            </div>
+
+            {/* เครื่องมือแนบไฟล์/ประเภทข้อความ */}
+            <div className="px-4 py-3 border-t border-zinc-800 flex flex-col gap-2 text-xs bg-black/20">
+              <div className="flex flex-col md:flex-row gap-2">
+                <label className="flex items-center gap-2 text-zinc-300">
+                  ประเภทข้อความ
+                  <select
+                    aria-label="เลือกประเภทข้อความ"
+                    className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1"
+                    value={replyType}
+                    onChange={(e) =>
+                      setReplyType(e.target.value as MessageType)
+                    }
+                    disabled={sending}
+                  >
+                    <option value="TEXT">TEXT</option>
+                    <option value="IMAGE">IMAGE</option>
+                    <option value="FILE">FILE</option>
+                    <option value="STICKER">STICKER</option>
+                    <option value="SYSTEM">SYSTEM</option>
+                  </select>
+                </label>
+
+                <input
+                  type="text"
+                  aria-label="ลิงก์ไฟล์หรือรูปแนบ"
+                  className="flex-1 border border-zinc-700 bg-zinc-900 rounded px-3 py-1 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  placeholder="ลิงก์ไฟล์/รูป (ถ้ามี)"
+                  value={attachmentUrl}
+                  onChange={(e) => setAttachmentUrl(e.target.value)}
+                  disabled={sending}
+                />
+              </div>
+
+              <input
+                type="text"
+                aria-label="Attachment meta JSON"
+                className="border border-zinc-700 bg-zinc-900 rounded px-3 py-1 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                placeholder={
+                  'Attachment meta (JSON) เช่น {"fileName":"image.png"}'
+                }
+                value={attachmentMetaInput}
+                onChange={(e) => setAttachmentMetaInput(e.target.value)}
+                disabled={sending}
+              />
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-xs disabled:opacity-50"
+                  disabled={uploading || sending}
+                  onClick={() => fileInputRef.current?.click()}
+                  title="อัปโหลดไฟล์จากเครื่อง"
+                >
+                  {uploading ? "กำลังอัปโหลด..." : "อัปโหลดไฟล์"}
+                </button>
+
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  aria-label="Upload file"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    e.target.value = ""; // reset เลือกไฟล์เดิมซ้ำได้
+                    void onPickFile(f);
+                  }}
+                />
+
+                <span className="text-xs text-neutral-400 truncate max-w-[260px]">
+                  {pickedFileName
+                    ? `เลือกแล้ว: ${pickedFileName}`
+                    : "ยังไม่เลือกไฟล์"}
+                </span>
+
+                {!!attachmentUrl && (
+                  <button
+                    type="button"
+                    className="px-2 py-1 rounded-md bg-neutral-900 border border-neutral-800 text-xs hover:bg-neutral-800"
+                    onClick={() => {
+                      setAttachmentUrl("");
+                      setAttachmentMetaInput("");
+                      setPickedFileName("");
+                      setReplyType("TEXT");
+                    }}
+                    title="ล้างไฟล์แนบ"
+                  >
+                    ล้างไฟล์
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* กล่องส่งข้อความแอดมิน */}
+            <div className="px-4 py-3 border-t border-zinc-800 flex gap-2 items-end">
+              <textarea
+                ref={replyTaRef}
+                aria-label="พิมพ์ข้อความตอบลูกค้า"
+                rows={1}
+                className="flex-1 border border-zinc-700 bg-zinc-900 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 max-h-[180px] overflow-auto resize-none"
+                placeholder={
+                  selectedSession
+                    ? "พิมพ์ข้อความตอบลูกค้า แล้วกด Enter หรือปุ่ม ส่ง (Shift+Enter ขึ้นบรรทัดใหม่)"
+                    : "กรุณาเลือกห้องแชทก่อนตอบลูกค้า"
+                }
+                value={replyText}
+                onChange={(e) => setReplyText(e.target.value)}
+                onKeyDown={handleKeyDownInput}
+                disabled={!selectedSession || sending}
+              />
+
+              <button
+                type="button"
+                onClick={handleSendReply}
+                disabled={
+                  !selectedSession ||
+                  sending ||
+                  (replyText.trim().length === 0 &&
+                    attachmentUrl.trim().length === 0)
+                }
+                className="px-4 py-2 rounded-lg bg-emerald-600 text-xs font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-emerald-500"
+              >
+                {sending ? "กำลังส่ง..." : "ส่ง"}
+              </button>
+            </div>
+          </div>
+
+          {/* Image Preview Overlay */}
+          {previewImage && (
+            <div
+              className="fixed inset-0 z-[999] bg-black/70 flex items-center justify-center"
+              onClick={() => setPreviewImage(null)}
+              role="dialog"
+              aria-label="แสดงรูปแบบขยาย"
+            >
+              <div
+                className="relative max-w-5xl max-h-[90vh] mx-4"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  onClick={() => setPreviewImage(null)}
+                  aria-label="ปิดหน้าต่างรูป"
+                  className="absolute -top-3 -right-3 bg-black/80 text-white rounded-full w-8 h-8 flex items-center justify-center text-xl"
+                >
+                  ×
+                </button>
+                <img
+                  src={previewImage}
+                  alt="preview"
+                  className="max-w-[90vw] max-h-[90vh] rounded-lg shadow-xl"
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ========================= TAB: AUTOMATION ========================= */}
+      {mainTab === "automation" && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 min-h-0">
+          <div className="lg:col-span-2 border border-zinc-800 rounded-xl bg-zinc-900/60 p-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="font-semibold text-zinc-100">FAQ</div>
+              <div className="text-[11px] text-zinc-500">
+                bot: {currentBot ? currentBot.name || currentBot.id : "-"}
+              </div>
+            </div>
+
+            {automationError && (
+              <div className="text-xs text-red-400">{automationError}</div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <input
+                aria-label="คำถาม FAQ"
+                className="bg-zinc-950/70 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100"
+                placeholder="คำถาม"
+                value={faqForm.question}
+                onChange={(e) =>
+                  setFaqForm((p) => ({ ...p, question: e.target.value }))
+                }
+              />
+              <input
+                aria-label="คีย์เวิร์ด FAQ"
+                className="bg-zinc-950/70 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100"
+                placeholder="คีย์เวิร์ด (คั่นด้วย , )"
+                value={faqForm.keywords}
+                onChange={(e) =>
+                  setFaqForm((p) => ({ ...p, keywords: e.target.value }))
+                }
+              />
+            </div>
+            <textarea
+              aria-label="คำตอบ FAQ"
+              className="w-full bg-zinc-950/70 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100 min-h-[120px]"
+              placeholder="คำตอบ"
+              value={faqForm.answer}
+              onChange={(e) =>
+                setFaqForm((p) => ({ ...p, answer: e.target.value }))
+              }
+            />
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => void handleSaveFaq()}
+                disabled={automationLoading}
+                className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-xs disabled:opacity-60"
+              >
+                {editingFaqId ? "บันทึกการแก้ไข" : "เพิ่ม FAQ"}
+              </button>
+              {editingFaqId && (
+                <button
+                  type="button"
+                  onClick={resetFaqForm}
+                  className="px-3 py-2 rounded-lg bg-zinc-800 text-zinc-200 text-xs"
+                >
+                  ยกเลิก
+                </button>
+              )}
+            </div>
+
+            <FaqList
+              items={faqItems}
+              loading={automationLoading}
+              onEdit={(item) => {
+                setEditingFaqId(item.id);
+                setFaqForm({
+                  question: item.question || "",
+                  answer: item.answer || "",
+                  keywords: Array.isArray(item.keywords)
+                    ? (item.keywords as string[]).join(", ")
+                    : "",
+                });
+              }}
+              onDelete={(id) => void handleDeleteFaq(id)}
+            />
+          </div>
+
+          <div className="border border-zinc-800 rounded-xl bg-zinc-900/60 p-4 space-y-4">
+            <div className="font-semibold text-zinc-100">Engagement</div>
+
+            <div className="flex gap-2">
+              <select
+                aria-label="เลือกแพลตฟอร์ม Engagement"
+                className="bg-zinc-950/70 border border-zinc-700 rounded-lg px-2 py-2 text-xs text-zinc-100"
+                value={engagementPlatform}
+                onChange={(e) => setEngagementPlatform(e.target.value as any)}
+              >
+                <option value="line">LINE</option>
+                <option value="telegram">Telegram</option>
+              </select>
+              <input
+                aria-label="ChannelId Engagement"
+                className="flex-1 bg-zinc-950/70 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100"
+                placeholder="channelId"
+                value={engagementForm.channelId}
+                onChange={(e) =>
+                  setEngagementForm((p) => ({
+                    ...p,
+                    channelId: e.target.value,
+                  }))
+                }
+              />
+            </div>
+
+            <textarea
+              aria-label="ข้อความ Engagement"
+              className="w-full bg-zinc-950/70 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100 min-h-[90px]"
+              placeholder="ข้อความที่จะส่งซ้ำ"
+              value={engagementForm.text}
+              onChange={(e) =>
+                setEngagementForm((p) => ({ ...p, text: e.target.value }))
+              }
+            />
+
+            <div className="flex items-center gap-2">
+              <input
+                aria-label="ความถี่นาที Engagement"
+                className="w-28 bg-zinc-950/70 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100"
+                type="number"
+                min={1}
+                value={engagementForm.intervalMinutes}
+                onChange={(e) =>
+                  setEngagementForm((p) => ({
+                    ...p,
+                    intervalMinutes: Number(e.target.value),
+                  }))
+                }
+              />
+              <span className="text-xs text-zinc-400">นาที</span>
+              <label className="ml-auto flex items-center gap-2 text-xs text-zinc-300">
+                <input
+                  aria-label="เปิดใช้งาน Engagement"
+                  type="checkbox"
+                  checked={automationEnabled}
+                  onChange={(e) => setAutomationEnabled(e.target.checked)}
+                />
+                enabled
+              </label>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => void handleSaveEngagement()}
+                disabled={automationLoading}
+                className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs disabled:opacity-60"
+              >
+                {editingEngagementId ? "บันทึกการแก้ไข" : "เพิ่ม Engagement"}
+              </button>
+              {editingEngagementId && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingEngagementId(null);
+                    setEngagementForm({
+                      text: "",
+                      intervalMinutes: 60,
+                      channelId: "",
+                    });
+                  }}
+                  className="px-3 py-2 rounded-lg bg-zinc-800 text-zinc-200 text-xs"
+                >
+                  ยกเลิก
+                </button>
+              )}
+            </div>
+
+            <EngagementList
+              items={engagementItems}
+              loading={automationLoading}
+              onToggle={(item, next) => void handleToggleEngagement(item, next)}
+              onEdit={(item) => {
+                setEditingEngagementId(item.id);
+                setEngagementPlatform(item.platform as any);
+                setEngagementForm({
+                  text: item.text || "",
+                  intervalMinutes: Number(item.intervalMinutes) || 60,
+                  channelId: item.channelId || "",
+                });
+                setAutomationEnabled(Boolean(item.enabled));
+              }}
+              onDelete={(id) => void handleDeleteEngagement(id)}
+            />
+
+            <div className="border-t border-zinc-800 pt-4 space-y-3">
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className={`px-3 py-2 rounded-lg border text-xs ${
+                    previewPlatform === "line"
+                      ? "border-emerald-500/70 bg-emerald-500/10 text-emerald-100"
+                      : "border-zinc-700 bg-zinc-900 text-zinc-200"
+                  }`}
+                  onClick={() => setPreviewPlatform("line")}
+                >
+                  Preview LINE
+                </button>
+                <button
+                  type="button"
+                  className={`px-3 py-2 rounded-lg border text-xs ${
+                    previewPlatform === "telegram"
+                      ? "border-emerald-500/70 bg-emerald-500/10 text-emerald-100"
+                      : "border-zinc-700 bg-zinc-900 text-zinc-200"
+                  }`}
+                  onClick={() => setPreviewPlatform("telegram")}
+                >
+                  Preview Telegram
+                </button>
+              </div>
+
+              <BotPreviewCard
+                platform={previewPlatform}
+                sampleFaq={previewFaq}
+                sampleEngagement={previewEngagement}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================= TAB: RICH ========================= */}
+      {mainTab === "rich" && (
+        <div className="border border-zinc-800 rounded-xl bg-zinc-900/60 p-4 space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="font-semibold text-zinc-100">
+              Rich Message Composer
+            </div>
+            <div className="text-[11px] text-zinc-500">
+              session:{" "}
+              {selectedSession
+                ? selectedSession.displayName ||
+                  selectedSession.userId ||
+                  selectedSession.id
+                : "-"}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <select
+              aria-label="เลือกแพลตฟอร์ม Rich"
+              className="bg-zinc-950/70 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100"
+              value={richPlatform}
+              onChange={(e) => setRichPlatform(e.target.value)}
+            >
+              <option value="line">LINE</option>
+              <option value="telegram">Telegram</option>
+            </select>
+
+            <input
+              aria-label="หัวข้อ Rich"
+              className="bg-zinc-950/70 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100"
+              placeholder="หัวข้อ"
+              value={richTitle}
+              onChange={(e) => setRichTitle(e.target.value)}
+            />
+
+            <input
+              aria-label="รูป URL Rich"
+              className="bg-zinc-950/70 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100"
+              placeholder="รูป (URL) (ถ้ามี)"
+              value={richImageUrl}
+              onChange={(e) => setRichImageUrl(e.target.value)}
+            />
+          </div>
+
+          <textarea
+            aria-label="เนื้อหา Rich"
+            className="w-full bg-zinc-950/70 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100 min-h-[120px]"
+            placeholder="เนื้อหา"
+            value={richBody}
+            onChange={(e) => setRichBody(e.target.value)}
+          />
+
+          <input
+            aria-label="Alt text Rich"
+            className="w-full bg-zinc-950/70 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100"
+            placeholder="altText (ถ้ามี)"
+            value={richAltText}
+            onChange={(e) => setRichAltText(e.target.value)}
+          />
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="text-xs text-zinc-300">Buttons</div>
+              <button
+                type="button"
+                onClick={handleAddRichButton}
+                className="px-3 py-2 rounded-lg bg-zinc-800 text-zinc-200 text-xs"
+              >
+                + เพิ่มปุ่ม
+              </button>
+            </div>
+
+            {richButtons.length === 0 ? (
+              <div className="text-xs text-zinc-500">ยังไม่มีปุ่ม</div>
+            ) : (
+              <div className="space-y-2">
+                {richButtons.map((b, idx) => (
+                  <div
+                    key={idx}
+                    className="grid grid-cols-1 md:grid-cols-3 gap-2"
+                  >
+                    <input
+                      aria-label={`label ปุ่ม ${idx + 1}`}
+                      className="bg-zinc-950/70 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100"
+                      value={b.label}
+                      onChange={(e) =>
+                        handleUpdateRichButton(idx, "label", e.target.value)
+                      }
+                      placeholder="label"
+                    />
+                    <select
+                      aria-label={`action ปุ่ม ${idx + 1}`}
+                      className="bg-zinc-950/70 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100"
+                      value={b.action}
+                      onChange={(e) =>
+                        handleUpdateRichButton(idx, "action", e.target.value)
+                      }
+                    >
+                      <option value="uri">uri</option>
+                      <option value="message">message</option>
+                      <option value="postback">postback</option>
+                    </select>
+                    <input
+                      aria-label={`value ปุ่ม ${idx + 1}`}
+                      className="bg-zinc-950/70 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100"
+                      value={b.value}
+                      onChange={(e) =>
+                        handleUpdateRichButton(idx, "value", e.target.value)
+                      }
+                      placeholder="value"
+                    />
                   </div>
                 ))}
               </div>
             )}
           </div>
-        </div>
 
-        <div className="bg-[#14171a] border border-zinc-800 rounded-xl p-4 space-y-3">
-          <div className="font-semibold text-sm text-zinc-100">สร้าง Poll / Q&A</div>
-          <div className="text-[11px] text-zinc-500">เลือกสตรีมล่าสุดอัตโนมัติ</div>
-          <input
-            className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs"
-            placeholder="คำถามสำหรับ Poll"
-            value={pollForm.question}
-            onChange={(e) => setPollForm((p) => ({ ...p, question: e.target.value }))}
-          />
-          <input
-            className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs"
-            placeholder="ตัวเลือก (คั่นด้วยคอมมา)"
-            value={pollForm.options}
-            onChange={(e) => setPollForm((p) => ({ ...p, options: e.target.value }))}
-          />
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={handleCreatePoll}
-              className="px-3 py-2 rounded bg-blue-600 text-white text-xs hover:bg-blue-500"
-            >
-              สร้าง Poll
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                const active = liveStreams[0];
-                if (!active) {
-                  toast.error("ยังไม่มี Live stream");
-                  return;
-                }
-                void submitLiveQuestion({
-                  liveStreamId: active.id,
-                  question: pollForm.question || "คำถามจาก Admin",
-                });
-                toast.success("ส่งคำถามตัวอย่าง");
-              }}
-              className="px-3 py-2 rounded bg-zinc-800 text-zinc-200 text-xs border border-zinc-700"
-            >
-              ส่ง Q&A (mock)
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* FAQ & Engagement Bot Panel */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="bg-[#14171a] border border-zinc-800 rounded-xl p-4 space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="font-semibold text-sm text-zinc-100">
-                Bot Settings (FAQ & Engagement)
-              </div>
-              <div className="text-xs text-zinc-500">
-                ปรับ FAQ/ข้อความกระตุ้น พร้อมสลับเปิดปิดบอทต่อ group/channel
-              </div>
-            </div>
-            <div className="flex items-center gap-2 text-xs">
-              <label className="flex items-center gap-2">
-                <span className="text-zinc-400">แพลตฟอร์ม</span>
-                <select
-                  className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs"
-                  value={engagementPlatform}
-                  onChange={(e) => {
-                    const val = e.target.value === "telegram" ? "telegram" : "line";
-                    setEngagementPlatform(val);
-                    setPreviewPlatform(val);
-                  }}
-                >
-                  <option value="line">LINE</option>
-                  <option value="telegram">Telegram</option>
-                </select>
-              </label>
-              <label className="flex items-center gap-1">
-                <input
-                  type="checkbox"
-                  className="rounded border-zinc-700 bg-zinc-900"
-                  checked={automationEnabled}
-                  onChange={(e) => setAutomationEnabled(e.target.checked)}
-                />
-                <span className="text-zinc-400">เปิดบอท</span>
-              </label>
-            </div>
-          </div>
-
-          {automationError && (
-            <div className="text-xs text-red-300 bg-red-900/30 border border-red-700 rounded px-3 py-2">
-              {automationError}
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 gap-4">
-            <div className="space-y-3">
+          {richPlatform === "telegram" && (
+            <div className="space-y-2 border-t border-zinc-800 pt-4">
               <div className="flex items-center justify-between">
-                <div className="font-semibold text-sm text-zinc-200">FAQ</div>
-                {editingFaqId && (
-                  <button
-                    type="button"
-                    className="text-[11px] text-emerald-300 hover:text-emerald-200"
-                    onClick={resetFaqForm}
-                  >
-                    เริ่มใหม่
-                  </button>
-                )}
-              </div>
-              <div className="grid grid-cols-1 gap-2">
-                <input
-                  className="bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm"
-                  placeholder="คำถาม"
-                  value={faqForm.question}
-                  onChange={(e) => setFaqForm((p) => ({ ...p, question: e.target.value }))}
-                />
-                <textarea
-                  className="bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm min-h-[72px]"
-                  placeholder="คำตอบ"
-                  value={faqForm.answer}
-                  onChange={(e) => setFaqForm((p) => ({ ...p, answer: e.target.value }))}
-                />
-                <input
-                  className="bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm"
-                  placeholder="คีย์เวิร์ด (คั่นด้วยคอมมา)"
-                  value={faqForm.keywords}
-                  onChange={(e) => setFaqForm((p) => ({ ...p, keywords: e.target.value }))}
-                />
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={handleSaveFaq}
-                    className="px-3 py-2 rounded bg-emerald-600 text-white text-xs disabled:opacity-60"
-                    disabled={automationLoading}
-                  >
-                    {editingFaqId ? "อัปเดต FAQ" : "เพิ่ม FAQ"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={resetFaqForm}
-                    className="px-3 py-2 rounded bg-zinc-800 text-zinc-200 text-xs border border-zinc-700"
-                  >
-                    ล้างฟอร์ม
-                  </button>
-                </div>
-              </div>
-              <FaqList
-                items={faqItems}
-                loading={automationLoading}
-                onEdit={(item) => {
-                  setEditingFaqId(item.id);
-                  setFaqForm({
-                    question: item.question,
-                    answer: item.answer,
-                    keywords: Array.isArray(item.keywords)
-                      ? (item.keywords as string[]).join(", ")
-                      : "",
-                  });
-                }}
-                onDelete={handleDeleteFaq}
-              />
-            </div>
-
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="font-semibold text-sm text-zinc-200">Engagement</div>
-                {editingEngagementId && (
-                  <button
-                    type="button"
-                    className="text-[11px] text-emerald-300 hover:text-emerald-200"
-                    onClick={() => {
-                      setEditingEngagementId(null);
-                      setEngagementForm({ text: "", intervalMinutes: 60, channelId: "" });
-                    }}
-                  >
-                    เริ่มใหม่
-                  </button>
-                )}
-              </div>
-              <div className="grid grid-cols-1 gap-2">
-                <input
-                  className="bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm"
-                  placeholder="Channel/Group ID"
-                  value={engagementForm.channelId}
-                  onChange={(e) =>
-                    setEngagementForm((p) => ({ ...p, channelId: e.target.value }))
-                  }
-                />
-                <textarea
-                  className="bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm min-h-[72px]"
-                  placeholder="ข้อความที่จะโพสต์"
-                  value={engagementForm.text}
-                  onChange={(e) => setEngagementForm((p) => ({ ...p, text: e.target.value }))}
-                />
-                <input
-                  type="number"
-                  min={1}
-                  className="bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm"
-                  placeholder="Interval (นาที)"
-                  value={engagementForm.intervalMinutes}
-                  onChange={(e) =>
-                    setEngagementForm((p) => ({
-                      ...p,
-                      intervalMinutes: Number(e.target.value) || 1,
-                    }))
-                  }
-                />
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={handleSaveEngagement}
-                    className="px-3 py-2 rounded bg-indigo-600 text-white text-xs disabled:opacity-60"
-                    disabled={automationLoading}
-                  >
-                    {editingEngagementId ? "อัปเดตข้อความ" : "เพิ่มข้อความ"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEngagementForm({ text: "", intervalMinutes: 60, channelId: "" });
-                      setEditingEngagementId(null);
-                    }}
-                    className="px-3 py-2 rounded bg-zinc-800 text-zinc-200 text-xs border border-zinc-700"
-                  >
-                    ล้างฟอร์ม
-                  </button>
-                </div>
-              </div>
-              <EngagementList
-                items={engagementItems}
-                loading={automationLoading}
-                onToggle={handleToggleEngagement}
-                onEdit={(item) => {
-                  setEditingEngagementId(item.id);
-                  setEngagementPlatform(
-                    item.platform === "telegram" ? "telegram" : "line"
-                  );
-                  setEngagementForm({
-                    channelId: item.channelId,
-                    text: item.text,
-                    intervalMinutes: item.intervalMinutes,
-                  });
-                }}
-                onDelete={handleDeleteEngagement}
-              />
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-[#0f1113] border border-zinc-800 rounded-xl p-4 space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="font-semibold text-sm text-zinc-100">Preview & Logs</div>
-              <div className="text-xs text-zinc-500">ดูตัวอย่างข้อความบอทและบันทึกล่าสุด</div>
-            </div>
-            <select
-              className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs"
-              value={previewPlatform}
-              onChange={(e) =>
-                setPreviewPlatform(e.target.value === "telegram" ? "telegram" : "line")
-              }
-            >
-              <option value="line">LINE</option>
-              <option value="telegram">Telegram</option>
-            </select>
-          </div>
-
-          <BotPreviewCard
-            platform={previewPlatform}
-            sampleFaq={previewFaq}
-            sampleEngagement={previewEngagement}
-          />
-
-          <div className="space-y-2">
-            <div className="text-sm font-semibold text-zinc-100">บันทึกการตอบกลับ (Bot)</div>
-            <div className="text-[11px] text-zinc-500">แสดง 8 รายการล่าสุด</div>
-            <div className="max-h-64 overflow-y-auto space-y-2">
-              {botLogs.length === 0 ? (
-                <div className="text-xs text-zinc-400">ยังไม่มี log จากบอท</div>
-              ) : (
-                botLogs.map((m) => (
-                  <div
-                    key={m.id}
-                    className="p-3 rounded-lg border border-zinc-800 bg-zinc-900/70 text-sm"
-                  >
-                    <div className="flex items-center justify-between text-[11px] text-zinc-400 mb-1">
-                      <span>{platformLabel(m.platform)}</span>
-                      <span>{new Date(m.createdAt).toLocaleString()}</span>
-                    </div>
-                    <div className="text-zinc-200 whitespace-pre-line">
-                      {m.text || "(ไม่มีข้อความ)"}
-                    </div>
-                    {m.meta && (m.meta as any).faqId && (
-                      <div className="text-[11px] text-emerald-300 mt-1">
-                        FAQ: {(m.meta as any).faqId}
-                      </div>
-                    )}
-                    {m.meta && (m.meta as any).engagementId && (
-                      <div className="text-[11px] text-emerald-300 mt-1">
-                        Engagement: {(m.meta as any).engagementId}
-                      </div>
-                    )}
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="bg-[#14171a] border border-zinc-800 rounded-xl p-4">
-        <div className="flex items-center justify-between mb-3">
-          <div className="font-semibold text-sm text-zinc-100">
-            Per-channel deliveries
-          </div>
-          <div className="text-[11px] text-zinc-500">
-            platform:bot grouped
-          </div>
-        </div>
-        {channelMetrics.length === 0 ? (
-          <div className="text-xs text-zinc-400">ยังไม่มีข้อมูล</div>
-        ) : (
-          <div className="h-56">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={channelMetricsData} margin={{ top: 8, right: 8, left: -16 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-                <XAxis dataKey="channelId" tick={{ fontSize: 10, fill: "#a1a1aa" }} interval={0} angle={-20} textAnchor="end" height={50} />
-                <YAxis tick={{ fontSize: 10, fill: "#a1a1aa" }} allowDecimals={false} />
-                <Tooltip cursor={{ fill: "#18181b" }} contentStyle={{ background: "#09090b", border: "1px solid #27272a", borderRadius: 8 }} />
-                <Bar dataKey="sent" fill="#34d399" radius={[4, 4, 0, 0]} name="Sent" />
-                <Bar dataKey="errors" fill="#f87171" radius={[4, 4, 0, 0]} name="Errors" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        )}
-      </div>
-
-      {/* ส่วนแชทหลัก */}
-      <div className="flex flex-1 gap-4 min-h-0">
-        {/* ซ้าย: รายการห้องแชท */}
-        <div className="w-80 border border-zinc-700 rounded-xl bg-zinc-900/60 flex flex-col min-h-0">
-          <div className="px-4 py-3 border-b border-zinc-800 flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <div className="font-semibold text-sm">Chat Sessions</div>
-              <span className="text-xs text-zinc-400">
-                bot: {currentBot ? currentBot.name || currentBot.id : "-"}
-              </span>
-            </div>
-            {/* ช่องค้นหาห้องแชท */}
-            <input
-              type="text"
-              aria-label="ค้นหาห้องแชท"
-              className="w-full bg-zinc-950/70 border border-zinc-700 rounded-lg px-2 py-1 text-xs text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-              placeholder="ค้นหาชื่อลูกค้า หรือ userId..."
-              value={sessionQuery}
-              onChange={(e) => setSessionQuery(e.target.value)}
-            />
-          </div>
-
-          {loadingSessions ? (
-            <div className="p-4 text-sm text-zinc-400">กำลังโหลด...</div>
-          ) : !selectedBotId ? (
-            <div className="p-4 text-sm text-zinc-400">
-              กรุณาเลือกบอทเพื่อดูห้องแชท
-            </div>
-          ) : filteredSessions.length === 0 ? (
-            <div className="p-4 text-sm text-zinc-400">
-              ไม่พบห้องแชทที่ตรงกับเงื่อนไข
-            </div>
-          ) : (
-            <div className="flex-1 overflow-y-auto">
-              {filteredSessions.map((s) => {
-                const isActive = selectedSession?.id === s.id;
-                const intentCode = getSessionIntentCode(s);
-                return (
-                  <button
-                    key={s.id}
-                    onClick={() => handleSelectSession(s)}
-                    className={`w-full text-left px-4 py-3 border-b border-zinc-800 text-sm hover:bg-zinc-800/60 ${
-                      isActive ? "bg-zinc-800/80" : ""
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="font-medium truncate">
-                        {s.displayName || s.userId}
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <IntentBadge code={intentCode} />
-                        <span className="px-2 py-0.5 rounded-full text-[10px] bg-zinc-800 text-zinc-200">
-                          {platformLabel(s.platform)}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="mt-1 text-[11px] text-zinc-400">
-                      {new Date(s.lastMessageAt).toLocaleString()}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* ขวา: ข้อความในห้อง */}
-        <div className="flex-1 border border-zinc-700 rounded-xl bg-zinc-900/60 flex flex-col min-h-0">
-          <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between gap-3 flex-wrap">
-            <div className="flex flex-col gap-1 min-w-[200px]">
-              <div className="font-semibold text-sm">
-                {isSearchMode
-                  ? `ผลการค้นหา (${searchResults?.length ?? 0})`
-                  : selectedSession
-                    ? selectedSession.displayName || selectedSession.userId
-                    : "ไม่มีห้องแชทที่เลือก"}
-              </div>
-              {!isSearchMode && selectedSession && (
-                <div className="flex items-center gap-2 text-xs text-zinc-400">
-                  <span>
-                    platform: {platformLabel(selectedSession.platform)}
-                  </span>
-                  <IntentBadge code={selectedSessionIntentCode} />
-                </div>
-              )}
-            </div>
-
-            <form
-              onSubmit={handleSearchSubmit}
-              className="flex items-center gap-2 text-xs"
-            >
-              <input
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="ค้นหาข้อความ..."
-                className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1 text-xs text-zinc-100 w-56"
-              />
-              <button
-                type="submit"
-                disabled={searching}
-                className="px-3 py-1 rounded-lg bg-emerald-600 text-white text-xs disabled:opacity-60"
-              >
-                {searching ? "ค้นหา..." : "ค้นหา"}
-              </button>
-              {isSearchMode && (
+                <div className="text-xs text-zinc-300">Inline Keyboard</div>
                 <button
                   type="button"
-                  onClick={() => void handleClearSearch()}
-                  className="px-3 py-1 rounded-lg bg-zinc-800 text-zinc-200 text-xs"
+                  onClick={handleAddInlineRow}
+                  className="px-3 py-2 rounded-lg bg-zinc-800 text-zinc-200 text-xs"
                 >
-                  ล้างคำค้น
+                  + เพิ่มแถว
                 </button>
-              )}
-            </form>
-          </div>
-
-          {error && (
-            <div className="px-4 py-2 text-xs text-red-400 border-b border-zinc-800">
-              {error}
-            </div>
-          )}
-
-          <div className="px-4 py-3 border-b border-zinc-800 bg-black/10 flex flex-col gap-2">
-            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 text-xs text-zinc-300">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-zinc-400">สนทนา:</span>
-                {activeConversation ? (
-                  <span className="font-medium">
-                    {conversationLabel(activeConversation)}
-                  </span>
-                ) : (
-                  <span className="text-zinc-500">-</span>
-                )}
-                {activeConversation?.platform && (
-                  <span className="px-2 py-0.5 rounded-full bg-zinc-800 border border-zinc-700 text-[11px]">
-                    {platformLabel(activeConversation.platform)}
-                  </span>
-                )}
               </div>
-              <div className="flex items-center gap-2">
-                <span className="text-zinc-400">
-                  หน้า {conversationPage} / {totalPages}
-                </span>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setConversationPage((p) => Math.max(1, p - 1))
-                    }
-                    disabled={conversationPage <= 1}
-                    className="px-2 py-1 rounded border border-zinc-700 text-zinc-200 text-[11px] disabled:opacity-50"
-                  >
-                    ก่อนหน้า
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setConversationPage((p) =>
-                        Math.min(totalPages, p + 1)
-                      )
-                    }
-                    disabled={conversationPage >= totalPages}
-                    className="px-2 py-1 rounded border border-zinc-700 text-zinc-200 text-[11px] disabled:opacity-50"
-                  >
-                    ถัดไป
-                  </button>
+
+              {richInlineKeyboard.length === 0 ? (
+                <div className="text-xs text-zinc-500">
+                  ยังไม่มี inline keyboard
                 </div>
-              </div>
-            </div>
-
-            <div className="flex gap-2 overflow-x-auto pt-1">
-              {conversationGroups.length === 0 && (
-                <span className="text-[11px] text-zinc-500">ไม่มีข้อความ</span>
-              )}
-              {conversationGroups.map((c) => {
-                const isActive = c.conversationId === selectedConversationId;
-                return (
-                  <button
-                    key={c.conversationId}
-                    type="button"
-                    onClick={() => {
-                      setSelectedConversationId(c.conversationId);
-                      setConversationPage(1);
-                    }}
-                    className={`px-3 py-2 rounded-lg border text-left text-[11px] min-w-[180px] transition ${
-                      isActive
-                        ? "border-emerald-500/70 bg-emerald-500/10 text-emerald-100"
-                        : "border-zinc-700 bg-zinc-900 text-zinc-200"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-semibold text-xs">
-                        {conversationLabel(c)}
-                      </span>
-                      {c.platform && (
-                        <span className="px-2 py-0.5 rounded-full bg-black/30 border border-white/10 text-[10px]">
-                          {platformLabel(c.platform)}
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-[10px] text-zinc-400 mt-1">
-                      {c.messages.length} ข้อความ
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div
-            ref={messagesRef}
-            className="flex-1 overflow-y-auto px-4 py-3 space-y-2 text-sm min-h-0"
-          >
-            {loadingMessages && !isSearchMode && (
-              <div className="text-zinc-400 text-xs">
-                กำลังโหลดข้อความ...
-              </div>
-            )}
-
-            {!loadingMessages &&
-              !isSearchMode &&
-              selectedSession &&
-              (!activeConversation || activeConversation.messages.length === 0) && (
-              <div className="text-zinc-400 text-xs">
-                ยังไม่มีข้อความในห้องนี้
-              </div>
-            )}
-
-            {!isSearchMode && !selectedSession && (
-              <div className="text-zinc-500 text-xs">
-                กรุณาเลือกลูกค้าจากด้านซ้ายเพื่อดูประวัติแชท
-              </div>
-            )}
-
-            {isSearchMode && searchResults && searchResults.length === 0 && (
-              <div className="text-zinc-400 text-xs">
-                ไม่พบข้อความที่ตรงกับคำค้นหา
-              </div>
-            )}
-
-            {messagesWithDateHeader.map((m) => {
-              const isBot = m.senderType === "bot";
-              const isAdmin = m.senderType === "admin";
-
-              let align = "justify-start";
-              let bubble = "bg-zinc-800 text-zinc-50"; // user
-
-              if (isBot) {
-                align = "justify-end";
-                bubble = "bg-emerald-600 text-white";
-              } else if (isAdmin) {
-                align = "justify-end";
-                bubble = "bg-blue-600 text-white";
-              }
-
-              const msgTypeRaw = (m.type as string) || m.messageType || "TEXT";
-              const msgType = msgTypeRaw.toString().toUpperCase();
-              const isTextMsg = msgType === "TEXT";
-
-              let content: React.ReactNode = null;
-
-              if (isTextMsg) {
-                content = m.text || "";
-              } else if (msgType === "IMAGE" && m.attachmentUrl) {
-                content = (
-                  <div className="space-y-2">
-                    {m.text && <div className="whitespace-pre-line">{m.text}</div>}
-                    <a
-                      href={m.attachmentUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="block"
-                    >
-                      <img
-                        src={m.attachmentUrl}
-                        alt="attachment"
-                        className="max-h-64 rounded-lg border border-white/10"
-                      />
-                    </a>
-                  </div>
-                );
-              } else if (msgType === "FILE") {
-                const fileName =
-                  (m.attachmentMeta as any)?.fileName || "ไฟล์แนบ";
-                content = (
-                  <div className="space-y-1">
-                    {m.text && <div className="whitespace-pre-line">{m.text}</div>}
-                    <a
-                      href={m.attachmentUrl || "#"}
-                      target={m.attachmentUrl ? "_blank" : undefined}
-                      rel="noreferrer"
-                      className="underline text-emerald-200"
-                    >
-                      {fileName}
-                    </a>
-                  </div>
-                );
-              } else if (msgType === "RICH") {
-                const meta: any = m.attachmentMeta || {};
-                const cards: any[] =
-                  meta?.contents?.contents || meta?.cards || (meta?.contents ? [meta.contents] : []);
-                content = (
-                  <div className="space-y-2">
-                    {m.text && <div className="font-semibold whitespace-pre-line">{m.text}</div>}
-                    {cards.length > 0 && (
-                      <div className="space-y-2">
-                        {cards.slice(0, 3).map((c, idx) => (
-                          <div
-                            key={idx}
-                            className="p-2 rounded border border-white/10 bg-black/20 space-y-1"
-                          >
-                            {c.hero?.url && (
-                              <img
-                                src={c.hero.url}
-                                alt="rich"
-                                className="rounded border border-white/10 max-h-40"
-                              />
-                            )}
-                            {c.body?.contents?.[0]?.text && (
-                              <div className="font-semibold text-sm">{c.body.contents[0].text}</div>
-                            )}
-                            {c.body?.contents?.[1]?.text && (
-                              <div className="text-xs text-zinc-300 whitespace-pre-line">
-                                {c.body.contents[1].text}
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {!cards.length && meta && (
-                      <pre className="text-[10px] bg-black/30 p-2 rounded border border-white/10 overflow-x-auto">
-                        {JSON.stringify(meta, null, 2)}
-                      </pre>
-                    )}
-                  </div>
-                );
-              } else if (msgType === "INLINE_KEYBOARD") {
-                const rows: any[] = (m.attachmentMeta as any)?.inlineKeyboard || [];
-                content = (
-                  <div className="space-y-2">
-                    {m.text && <div className="whitespace-pre-line">{m.text}</div>}
-                    {rows.length > 0 && (
-                      <div className="space-y-1">
-                        {rows.map((row, idx) => (
-                          <div key={idx} className="flex flex-wrap gap-2">
-                            {row.map((btn: any, bidx: number) => (
-                              <span
-                                key={`${idx}-${bidx}`}
-                                className="px-2 py-1 rounded bg-sky-700 text-white text-[11px]"
-                              >
-                                {btn.text || "ปุ่ม"}
-                              </span>
-                            ))}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              } else {
-                content = (
-                  <div className="space-y-1">
-                    {m.text && <div className="whitespace-pre-line">{m.text}</div>}
-                    <span className="px-2 py-1 rounded bg-black/30 border border-white/10 text-[11px]">
-                      {msgType || "MESSAGE"}
-                    </span>
-                  </div>
-                );
-              }
-
-              const msgIntentCode = getMessageIntentCode(m);
-              const msgIntentLabel = intentCodeToLabel(msgIntentCode);
-              const messagePlatform = platformLabel(
-                m.platform || m.session?.platform || selectedSession?.platform
-              );
-              const sessionLabel = isSearchMode
-                ? m.session?.displayName ||
-                  m.session?.userId ||
-                  m.session?.id ||
-                  ""
-                : null;
-
-              return (
-                <React.Fragment key={m.id}>
-                  {m._showDateHeader && m._dateLabel && (
-                    <div className="flex justify-center my-2">
-                      <span className="px-3 py-1 rounded-full bg-zinc-800 text-[10px] text-zinc-300">
-                        {m._dateLabel}
-                      </span>
-                    </div>
-                  )}
-                  <div className={`flex ${align} gap-2 items-end text-sm`}>
-                    <div className={`max-w-[70%] flex flex-col gap-1`}>
-                      {sessionLabel && (
-                        <div className="text-[11px] text-zinc-400">
-                          {sessionLabel} {messagePlatform ? `(${messagePlatform})` : ""}
-                        </div>
-                      )}
-                      <div
-                        className={`px-3 py-2 rounded-2xl ${bubble} whitespace-pre-line`}
-                      >
-                      {content}
-                      {/* แสดง intent เฉพาะข้อความฝั่ง user และถ้ามี label */}
-                      {m.senderType === "user" && msgIntentLabel && (
-                        <div className="mt-1 text-[10px] opacity-80">
-                          หมวด: {msgIntentLabel}
-                        </div>
-                      )}
-                      <div className="mt-1 text-[10px] opacity-70 flex items-center justify-between gap-2">
-                        {messagePlatform && (
-                          <span className="px-2 py-0.5 rounded-full bg-black/20 border border-white/10">
-                            {messagePlatform}
-                          </span>
-                        )}
-                        <span className="ml-auto text-right">
-                          {new Date(m.createdAt).toLocaleTimeString()}
-                        </span>
-                      </div>
-                      </div>
-                    </div>
-                  </div>
-                </React.Fragment>
-              );
-            })}
-          </div>
-
-          {/* Rich / Inline Keyboard Composer */}
-          <div className="px-4 py-4 border-t border-zinc-800 bg-black/20 flex flex-col gap-3">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <div>
-                <div className="font-semibold text-sm">ส่ง Rich Message / Inline Keyboard</div>
-                <div className="text-xs text-zinc-400">
-                  LINE ใช้ Flex Message, Telegram ใช้ Inline Keyboard
-                </div>
-              </div>
-              <div className="flex items-center gap-2 text-xs">
-                <label className="flex items-center gap-2">
-                  แพลตฟอร์ม
-                  <select
-                    className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1"
-                    value={richPlatform}
-                    onChange={(e) => setRichPlatform(e.target.value)}
-                    disabled={sendingRich}
-                  >
-                    <option value="line">LINE</option>
-                    <option value="telegram">Telegram</option>
-                  </select>
-                </label>
-              </div>
-            </div>
-
-            <div className="grid md:grid-cols-2 gap-3">
-              <div className="space-y-2 text-xs text-zinc-200">
-                <input
-                  className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm"
-                  placeholder="หัวข้อ"
-                  value={richTitle}
-                  onChange={(e) => setRichTitle(e.target.value)}
-                  disabled={sendingRich}
-                />
-                <textarea
-                  className="w-full min-h-[80px] bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm"
-                  placeholder="เนื้อหา"
-                  value={richBody}
-                  onChange={(e) => setRichBody(e.target.value)}
-                  disabled={sendingRich}
-                />
-                <input
-                  className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm"
-                  placeholder="ลิงก์รูปภาพ (ถ้ามี)"
-                  value={richImageUrl}
-                  onChange={(e) => setRichImageUrl(e.target.value)}
-                  disabled={sendingRich}
-                />
-                <input
-                  className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm"
-                  placeholder="ALT text (สำหรับ LINE Flex)"
-                  value={richAltText}
-                  onChange={(e) => setRichAltText(e.target.value)}
-                  disabled={sendingRich}
-                />
-
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-zinc-300">ปุ่ม (Flex)</span>
-                    <button
-                      type="button"
-                      className="px-2 py-1 text-[11px] bg-zinc-800 rounded border border-zinc-700"
-                      onClick={handleAddRichButton}
-                      disabled={sendingRich}
-                    >
-                      + เพิ่มปุ่ม
-                    </button>
-                  </div>
-                  {richButtons.length === 0 && (
-                    <div className="text-zinc-500 text-[11px]">ยังไม่มีปุ่ม</div>
-                  )}
-                  {richButtons.map((btn, idx) => (
+              ) : (
+                <div className="space-y-3">
+                  {richInlineKeyboard.map((row, rowIdx) => (
                     <div
-                      key={`${idx}-${btn.label}`}
-                      className="grid grid-cols-3 gap-2 items-center"
+                      key={rowIdx}
+                      className="border border-zinc-800 rounded-lg p-3 space-y-2"
                     >
-                      <input
-                        className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-[11px]"
-                        placeholder="label"
-                        value={btn.label}
-                        onChange={(e) => handleUpdateRichButton(idx, "label", e.target.value)}
-                        disabled={sendingRich}
-                      />
-                      <select
-                        className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-[11px]"
-                        value={btn.action}
-                        onChange={(e) =>
-                          handleUpdateRichButton(idx, "action", e.target.value as any)
-                        }
-                        disabled={sendingRich}
-                      >
-                        <option value="uri">URI</option>
-                        <option value="message">Message</option>
-                        <option value="postback">Postback</option>
-                      </select>
-                      <input
-                        className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-[11px] col-span-1"
-                        placeholder="ค่า"
-                        value={btn.value}
-                        onChange={(e) => handleUpdateRichButton(idx, "value", e.target.value)}
-                        disabled={sendingRich}
-                      />
+                      <div className="flex items-center justify-between">
+                        <div className="text-xs text-zinc-400">
+                          Row #{rowIdx + 1}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleAddInlineButton(rowIdx)}
+                          className="px-3 py-1 rounded bg-sky-700 text-white text-xs"
+                        >
+                          + ปุ่ม
+                        </button>
+                      </div>
+
+                      <div className="space-y-2">
+                        {row.map((btn, btnIdx) => (
+                          <div
+                            key={btnIdx}
+                            className="grid grid-cols-1 md:grid-cols-2 gap-2"
+                          >
+                            <input
+                              aria-label={`inline text row ${rowIdx + 1} btn ${btnIdx + 1}`}
+                              className="bg-zinc-950/70 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100"
+                              value={btn.text}
+                              onChange={(e) =>
+                                handleUpdateInlineButton(
+                                  rowIdx,
+                                  btnIdx,
+                                  "text",
+                                  e.target.value
+                                )
+                              }
+                              placeholder="text"
+                            />
+                            <input
+                              aria-label={`inline callback row ${rowIdx + 1} btn ${btnIdx + 1}`}
+                              className="bg-zinc-950/70 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100"
+                              value={btn.callbackData}
+                              onChange={(e) =>
+                                handleUpdateInlineButton(
+                                  rowIdx,
+                                  btnIdx,
+                                  "callbackData",
+                                  e.target.value
+                                )
+                              }
+                              placeholder="callbackData"
+                            />
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   ))}
                 </div>
-
-                {richPlatform === "telegram" && (
-                  <div className="space-y-2 mt-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-zinc-300">Inline Keyboard</span>
-                      <button
-                        type="button"
-                        className="px-2 py-1 text-[11px] bg-zinc-800 rounded border border-zinc-700"
-                        onClick={handleAddInlineRow}
-                        disabled={sendingRich}
-                      >
-                        + เพิ่มแถว
-                      </button>
-                    </div>
-                    {richInlineKeyboard.length === 0 && (
-                      <div className="text-[11px] text-zinc-500">ยังไม่มีปุ่ม</div>
-                    )}
-                    {richInlineKeyboard.map((row, rowIdx) => (
-                      <div key={`row-${rowIdx}`} className="space-y-1 p-2 bg-zinc-900 rounded border border-zinc-800">
-                        <div className="flex items-center justify-between text-[11px] text-zinc-400">
-                          <span>แถว {rowIdx + 1}</span>
-                          <button
-                            type="button"
-                            className="px-2 py-1 bg-zinc-800 rounded border border-zinc-700"
-                            onClick={() => handleAddInlineButton(rowIdx)}
-                            disabled={sendingRich}
-                          >
-                            + ปุ่ม
-                          </button>
-                        </div>
-                        <div className="space-y-1">
-                          {row.map((btn, btnIdx) => (
-                            <div key={`btn-${rowIdx}-${btnIdx}`} className="grid grid-cols-2 gap-2">
-                              <input
-                                className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-[11px]"
-                                placeholder="ข้อความปุ่ม"
-                                value={btn.text}
-                                onChange={(e) =>
-                                  handleUpdateInlineButton(rowIdx, btnIdx, "text", e.target.value)
-                                }
-                                disabled={sendingRich}
-                              />
-                              <input
-                                className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-[11px]"
-                                placeholder="callback_data"
-                                value={btn.callbackData}
-                                onChange={(e) =>
-                                  handleUpdateInlineButton(rowIdx, btnIdx, "callbackData", e.target.value)
-                                }
-                                disabled={sendingRich}
-                              />
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                <div className="flex gap-2 mt-3">
-                  <button
-                    type="button"
-                    onClick={handleSendRich}
-                    disabled={sendingRich || !selectedSession}
-                    className="px-4 py-2 rounded bg-emerald-600 text-white text-xs disabled:opacity-50"
-                  >
-                    {sendingRich ? "กำลังส่ง..." : "ส่ง Rich Message"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={resetRichComposer}
-                    className="px-3 py-2 rounded bg-zinc-800 text-xs"
-                  >
-                    ล้างฟอร์ม
-                  </button>
-                </div>
-              </div>
-
-              <div className="p-3 border border-zinc-800 rounded-lg bg-zinc-950/60 text-xs text-zinc-200 space-y-2">
-                <div className="font-semibold text-sm">ตัวอย่าง Preview</div>
-                <div className="border border-zinc-800 rounded-lg p-3 bg-black/30 space-y-2">
-                  <div className="text-sm font-bold">{richTitle || "(หัวข้อ)"}</div>
-                  <div className="text-xs text-zinc-300 whitespace-pre-line">
-                    {richBody || "รายละเอียด"}
-                  </div>
-                  {richImageUrl && (
-                    <img
-                      src={richImageUrl}
-                      alt="preview"
-                      className="rounded border border-white/10 max-h-48"
-                    />
-                  )}
-                  {richButtons.length > 0 && (
-                    <div className="flex flex-wrap gap-2">
-                      {richButtons.map((b, idx) => (
-                        <span
-                          key={`${b.label}-${idx}`}
-                          className="px-2 py-1 rounded bg-emerald-700 text-white text-[11px]"
-                        >
-                          {b.label || "ปุ่ม"}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  {richPlatform === "telegram" && richInlineKeyboard.length > 0 && (
-                    <div className="space-y-1">
-                      {richInlineKeyboard.map((row, idx) => (
-                        <div key={`preview-row-${idx}`} className="flex gap-2">
-                          {row.map((btn, bidx) => (
-                            <span
-                              key={`preview-btn-${idx}-${bidx}`}
-                              className="px-2 py-1 rounded bg-sky-700 text-white text-[11px]"
-                            >
-                              {btn.text || "ปุ่ม"}
-                            </span>
-                          ))}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
+              )}
             </div>
-          </div>
+          )}
 
-          {/* เครื่องมือแนบไฟล์/ประเภทข้อความ */}
-          <div className="px-4 py-3 border-t border-zinc-800 flex flex-col gap-2 text-xs bg-black/20">
-            <div className="flex flex-col md:flex-row gap-2">
-              <label className="flex items-center gap-2 text-zinc-300">
-                ประเภทข้อความ
-                <select
-                  className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1"
-                  value={replyType}
-                  onChange={(e) => setReplyType(e.target.value as MessageType)}
-                  disabled={sending}
-                >
-                  <option value="TEXT">TEXT</option>
-                  <option value="IMAGE">IMAGE</option>
-                  <option value="FILE">FILE</option>
-                  <option value="STICKER">STICKER</option>
-                  <option value="SYSTEM">SYSTEM</option>
-                </select>
-              </label>
-
-              <input
-                type="text"
-                className="flex-1 border border-zinc-700 bg-zinc-900 rounded px-3 py-1 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                placeholder="ลิงก์ไฟล์/รูป (ถ้ามี)"
-                value={attachmentUrl}
-                onChange={(e) => setAttachmentUrl(e.target.value)}
-                disabled={sending}
-              />
-            </div>
-            <input
-              type="text"
-              className="border border-zinc-700 bg-zinc-900 rounded px-3 py-1 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-              placeholder={'Attachment meta (JSON) เช่น {"fileName":"image.png"}'}
-              value={attachmentMetaInput}
-              onChange={(e) => setAttachmentMetaInput(e.target.value)}
-              disabled={sending}
-            />
-          </div>
-
-          {/* กล่องส่งข้อความแอดมิน */}
-          <div className="px-4 py-3 border-t border-zinc-800 flex gap-2 items-center">
-            <input
-              type="text"
-              className="flex-1 border border-zinc-700 bg-zinc-900 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-              placeholder={
-                selectedSession
-                  ? "พิมพ์ข้อความตอบลูกค้า แล้วกด Enter หรือปุ่ม ส่ง"
-                  : "กรุณาเลือกห้องแชทก่อนตอบลูกค้า"
-              }
-              value={replyText}
-              onChange={(e) => setReplyText(e.target.value)}
-              onKeyDown={handleKeyDownInput}
-              disabled={!selectedSession || sending}
-            />
+          <div className="flex gap-2">
             <button
               type="button"
-              onClick={handleSendReply}
-              disabled={
-                !selectedSession ||
-                sending ||
-                (replyText.trim().length === 0 && attachmentUrl.trim().length === 0)
-              }
-              className="px-4 py-2 rounded-lg bg-emerald-600 text-xs font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-emerald-500"
+              onClick={() => void handleSendRich()}
+              disabled={sendingRich}
+              className="px-4 py-2 rounded-lg bg-emerald-600 text-xs font-medium text-white disabled:opacity-50"
             >
-              {sending ? "กำลังส่ง..." : "ส่ง"}
+              {sendingRich ? "กำลังส่ง..." : "ส่ง Rich"}
+            </button>
+            <button
+              type="button"
+              onClick={resetRichComposer}
+              className="px-4 py-2 rounded-lg bg-zinc-800 text-xs font-medium text-zinc-200"
+            >
+              ล้างฟอร์ม
             </button>
           </div>
         </div>
-      </div>
+      )}
+
+      {/* ========================= TAB: LIVE ========================= */}
+      {mainTab === "live" && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 min-h-0">
+          <div className="lg:col-span-2 border border-zinc-800 rounded-xl bg-zinc-900/60 p-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="font-semibold text-zinc-100">Live Streams</div>
+              <button
+                type="button"
+                onClick={() => void reloadLive()}
+                className="px-3 py-2 rounded-lg bg-zinc-800 text-zinc-200 text-xs"
+              >
+                รีเฟรช
+              </button>
+            </div>
+
+            {liveLoading ? (
+              <div className="text-xs text-zinc-400">กำลังโหลด...</div>
+            ) : liveStreams.length === 0 ? (
+              <div className="text-xs text-zinc-400">ยังไม่มี live</div>
+            ) : (
+              <div className="space-y-2">
+                {liveStreams.slice(0, 10).map((s) => (
+                  <div
+                    key={s.id}
+                    className="p-3 rounded-lg border border-zinc-800 bg-zinc-950/40"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="font-semibold text-zinc-100">
+                        {s.title || s.id}
+                      </div>
+                      <div className="text-[11px] text-zinc-500">
+                        {s.channelId}
+                      </div>
+                    </div>
+                    {s.description && (
+                      <div className="text-xs text-zinc-300 mt-1">
+                        {s.description}
+                      </div>
+                    )}
+                    <div className="text-[11px] text-zinc-500 mt-2 flex gap-3">
+                      <span>Q: {(s.questions || []).length}</span>
+                      <span>P: {(s.polls || []).length}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="border border-zinc-800 rounded-xl bg-zinc-900/60 p-4 space-y-4">
+            <div className="font-semibold text-zinc-100">ควบคุม Live</div>
+
+            <div className="space-y-2">
+              <div className="text-xs text-zinc-400">Start Live (Telegram)</div>
+              <input
+                aria-label="Live channelId"
+                className="w-full bg-zinc-950/70 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100"
+                placeholder="channelId"
+                value={liveForm.channelId}
+                onChange={(e) =>
+                  setLiveForm((p) => ({ ...p, channelId: e.target.value }))
+                }
+              />
+              <input
+                aria-label="Live title"
+                className="w-full bg-zinc-950/70 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100"
+                placeholder="title"
+                value={liveForm.title}
+                onChange={(e) =>
+                  setLiveForm((p) => ({ ...p, title: e.target.value }))
+                }
+              />
+              <input
+                aria-label="Live description"
+                className="w-full bg-zinc-950/70 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100"
+                placeholder="description (optional)"
+                value={liveForm.description}
+                onChange={(e) =>
+                  setLiveForm((p) => ({ ...p, description: e.target.value }))
+                }
+              />
+              <button
+                type="button"
+                onClick={() => void handleStartLive()}
+                className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-xs"
+              >
+                Start
+              </button>
+            </div>
+
+            <div className="border-t border-zinc-800 pt-4 space-y-3">
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className={`px-3 py-2 rounded-lg border text-xs ${
+                    liveTab === "qna"
+                      ? "border-emerald-500/70 bg-emerald-500/10 text-emerald-100"
+                      : "border-zinc-700 bg-zinc-900 text-zinc-200"
+                  }`}
+                  onClick={() => setLiveTab("qna")}
+                >
+                  QnA
+                </button>
+                <button
+                  type="button"
+                  className={`px-3 py-2 rounded-lg border text-xs ${
+                    liveTab === "polls"
+                      ? "border-emerald-500/70 bg-emerald-500/10 text-emerald-100"
+                      : "border-zinc-700 bg-zinc-900 text-zinc-200"
+                  }`}
+                  onClick={() => setLiveTab("polls")}
+                >
+                  Polls
+                </button>
+              </div>
+
+              {liveTab === "qna" ? (
+                <div className="space-y-2">
+                  <textarea
+                    aria-label="พิมพ์คำถาม Live"
+                    className="w-full bg-zinc-950/70 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100 min-h-[90px]"
+                    placeholder="พิมพ์คำถาม (ส่งเข้า live stream ล่าสุด)"
+                    value={liveQuestionText}
+                    onChange={(e) => setLiveQuestionText(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void handleSubmitLiveQuestion()}
+                    className="px-3 py-2 rounded-lg bg-sky-700 text-white text-xs"
+                  >
+                    ส่งคำถาม
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <input
+                    aria-label="คำถาม Poll"
+                    className="w-full bg-zinc-950/70 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100"
+                    placeholder="คำถาม poll"
+                    value={pollForm.question}
+                    onChange={(e) =>
+                      setPollForm((p) => ({ ...p, question: e.target.value }))
+                    }
+                  />
+                  <input
+                    aria-label="ตัวเลือก Poll"
+                    className="w-full bg-zinc-950/70 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100"
+                    placeholder="ตัวเลือก (คั่นด้วย , ) เช่น A,B,C"
+                    value={pollForm.options}
+                    onChange={(e) =>
+                      setPollForm((p) => ({ ...p, options: e.target.value }))
+                    }
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void handleCreatePoll()}
+                    className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs"
+                  >
+                    สร้าง Poll
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================= TAB: METRICS ========================= */}
+      {mainTab === "metrics" && (
+        <div className="bg-[#14171a] border border-zinc-800 rounded-xl p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="font-semibold text-sm text-zinc-100">
+              Per-channel deliveries
+            </div>
+            <div className="text-[11px] text-zinc-500">
+              updatedAt: {metrics?.updatedAt ?? "-"}
+            </div>
+          </div>
+
+          {channelMetrics.length === 0 ? (
+            <div className="text-xs text-zinc-400">ยังไม่มีข้อมูล</div>
+          ) : (
+            <div className="h-56">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={channelMetricsData}
+                  margin={{ top: 8, right: 8, left: -16 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                  <XAxis
+                    dataKey="channelId"
+                    interval={0}
+                    angle={-20}
+                    textAnchor="end"
+                    height={50}
+                  />
+                  <YAxis allowDecimals={false} />
+                  <Tooltip />
+                  <Bar dataKey="sent" radius={[4, 4, 0, 0]} name="Sent" />
+                  <Bar dataKey="errors" radius={[4, 4, 0, 0]} name="Errors" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          <div className="text-[11px] text-zinc-500">
+            หมายเหตุ: ถ้าคุณมี endpoint metrics แล้ว เดี๋ยวค่อยผูกเพิ่ม
+            (ตอนนี้เป็น UI เฉย ๆ)
+          </div>
+        </div>
+      )}
     </div>
   );
 };

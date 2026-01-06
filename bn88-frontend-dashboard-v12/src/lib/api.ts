@@ -1,7 +1,7 @@
-/// <reference types="vite/client" />
-
+// src/lib/api.ts
 import axios, {
   AxiosError,
+  AxiosResponse,
   type InternalAxiosRequestConfig,
   type AxiosRequestHeaders,
 } from "axios";
@@ -81,6 +81,7 @@ export type RangeItem = {
   follow: number;
   unfollow: number;
 };
+
 export type RangeResp = {
   ok: boolean;
   items: RangeItem[];
@@ -124,13 +125,24 @@ export type ChatSession = {
   platform: BotPlatform | string;
   userId: string;
   displayName?: string | null;
+
   lastMessageAt: string;
   createdAt?: string;
   updatedAt?: string;
   tenant?: string;
-};
 
-// src/lib/api.ts (ส่วนของ type สำหรับข้อความแชท)
+  lastText?: string | null;
+  lastDirection?: "user" | "bot" | "admin" | string;
+  status?: "open" | "pending" | "closed" | string;
+
+  caseCount?: number;
+  hasProblem?: boolean; // ชื่อจริงใน DB
+  isIssue?: boolean; // map จาก hasProblem
+
+  unread?: number;
+  tags?: string | null; // ใน DB เป็น text
+  adminNote?: string | null;
+};
 
 export type MessageType =
   | "TEXT"
@@ -150,7 +162,6 @@ export type ChatMessage = {
   botId: string;
   platform: string | null;
 
-  // ✅ รองรับแอดมินด้วย
   senderType: "user" | "bot" | "admin";
 
   type?: MessageType | string;
@@ -172,6 +183,67 @@ export type ChatMessage = {
     botId?: string | null;
   };
 };
+
+const normalizeChatMessage = (m: ChatMessage): ChatMessage => ({
+  ...m,
+  conversationId:
+    (m as any).conversationId ?? m.sessionId ?? m.session?.id ?? null,
+});
+const toArray = <T>(v: any): T[] => (Array.isArray(v) ? v : []);
+export type ImageSampleItem = {
+  id: string;
+  tenant: string;
+  botId: string;
+  label: string;
+  note?: string | null;
+  ahash: string;
+  mime?: string | null;
+  size?: number | null;
+  createdAt: string;
+};
+
+export async function listImageSamples(botId: string, label?: string) {
+  const r = await API.get<{ ok: boolean; items: ImageSampleItem[] }>(
+    "/admin/image-samples",
+    { params: { botId, label: label || undefined } }
+  );
+  return r.data;
+}
+
+export async function uploadImageSamples(params: {
+  botId: string;
+  label: string;
+  note?: string;
+  files: File[];
+}) {
+  const fd = new FormData();
+  fd.append("botId", params.botId);
+  fd.append("label", params.label);
+  if (params.note) fd.append("note", params.note);
+  for (const f of params.files) fd.append("files", f);
+
+  const r = await API.post("/admin/image-samples", fd, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+  return r.data as any;
+}
+
+export async function deleteImageSample(id: string) {
+  const r = await API.delete(`/admin/image-samples/${encodeURIComponent(id)}`);
+  return r.data as any;
+}
+
+export async function getImageSampleBlob(id: string): Promise<Blob> {
+  const r = await API.get(
+    `/admin/image-samples/${encodeURIComponent(id)}/blob`,
+    {
+      responseType: "blob",
+    }
+  );
+  return r.data as Blob;
+}
+
+/* ========================== FAQ & Engagement types ========================== */
 
 export type FaqEntry = {
   id: string;
@@ -198,13 +270,7 @@ export type EngagementMessage = {
   updatedAt?: string;
 };
 
-const normalizeChatMessage = (m: ChatMessage): ChatMessage => ({
-  ...m,
-  conversationId:
-    (m as any).conversationId ?? m.sessionId ?? (m.session?.id ?? null),
-});
-
-/* ---- Knowledge types ---- */
+/* ============================== Knowledge types ============================== */
 
 export type KnowledgeDoc = {
   id: string;
@@ -242,7 +308,7 @@ export type KnowledgeListResponse = {
   pages: number;
 };
 
-/* ---- LEP (Line Engagement Platform) types ---- */
+/* ---- LEP types ---- */
 
 export type LepHealthResponse = {
   ok: boolean;
@@ -301,6 +367,8 @@ export type LepCampaignSchedule = {
   updatedAt?: string;
 };
 
+/* ---- Live / Roles ---- */
+
 export type LiveStream = {
   id: string;
   channelId: string;
@@ -345,33 +413,38 @@ export type AdminUserItem = {
   roles: RoleItem[];
 };
 
+/* ================================ Base / ENV ================================ */
 
-/* ================================ Base ================================ */
+function trimSlash(s: string) {
+  return (s || "").replace(/\/+$/, "");
+}
 
-export const API_BASE = (import.meta.env.VITE_API_BASE || "/api").replace(
-  /\/+$/,
-  ""
+// IMPORTANT: baseURL ควรชี้ไปที่ "/api" (หรือ "http://localhost:3000/api")
+export const API_BASE = trimSlash(
+  (import.meta as any).env?.VITE_API_BASE ||
+    (import.meta as any).env?.VITE_ADMIN_API_BASE ||
+    "/api"
 );
-const TENANT = import.meta.env.VITE_TENANT || "bn9";
 
-// ต้องใช้ key ตัวนี้เหมือนกันใน main.tsx และ Login.tsx
-const TOKEN_KEY = "bn9.admin.token";
+export const TENANT =
+  (import.meta as any).env?.VITE_DEFAULT_TENANT ||
+  (import.meta as any).env?.VITE_TENANT ||
+  "bn9";
 
-/* ======================= Token helpers ======================= */
+// ให้ทั้งโปรเจกต์ใช้ key เดียว (ให้สอดคล้องกับ RequireAuth ถ้าเดิมใช้ bn9_jwt)
+export const TOKEN_KEY = "bn9_jwt";
 
-(function migrateLegacyToken() {
-  try {
-    const legacy = localStorage.getItem("BN9_TOKEN");
-    if (legacy && !localStorage.getItem(TOKEN_KEY)) {
-      localStorage.setItem(TOKEN_KEY, legacy);
-      localStorage.removeItem("BN9_TOKEN");
-    }
-  } catch {
-    // ignore
-  }
-})();
+// รองรับ key เก่าๆ ทั้งหมด (จะ migrate ให้เอง)
+const LEGACY_TOKEN_KEYS = [
+  "bn9.admin.token",
+  "BN9_TOKEN",
+  "bn9_token",
+  "BN9_ADMIN_JWT",
+];
 
-function getToken(): string {
+/* ================================ Token Utils ================================ */
+
+export function getToken(): string {
   try {
     return localStorage.getItem(TOKEN_KEY) || "";
   } catch {
@@ -390,66 +463,182 @@ export function setToken(t: string) {
 export function clearToken() {
   try {
     localStorage.removeItem(TOKEN_KEY);
+    for (const k of LEGACY_TOKEN_KEYS) localStorage.removeItem(k);
   } catch {
     // ignore
   }
 }
 
-let accessToken = getToken();
+(function migrateLegacyToken() {
+  try {
+    const current = localStorage.getItem(TOKEN_KEY);
+    if (current) return;
+
+    for (const k of LEGACY_TOKEN_KEYS) {
+      const v = localStorage.getItem(k);
+      if (v) {
+        localStorage.setItem(TOKEN_KEY, v);
+        for (const kk of LEGACY_TOKEN_KEYS) localStorage.removeItem(kk);
+        return;
+      }
+    }
+  } catch {
+    // ignore
+  }
+})();
+
+/**
+ * หุ้ม URL ให้พก token แอดมินไปด้วย (ใช้กับรูป / ไฟล์ ที่โหลดผ่าน <img>, <a>)
+ */
+export function withToken(url?: string | null): string {
+  if (!url) return "";
+  const token = getToken();
+  if (!token) return url;
+
+  const [base, hash] = url.split("#");
+  const sep = base.includes("?") ? "&" : "?";
+  const full = `${base}${sep}token=${encodeURIComponent(token)}`;
+  return hash ? `${full}#${hash}` : full;
+}
+
+export function getApiBase() {
+  return API_BASE || "/api";
+}
 
 /* ================================ Axios ================================ */
 
 export const API = axios.create({
-  baseURL: API_BASE,
+  baseURL: API_BASE || "/api",
   timeout: 15000,
 });
 
+// boot: ถ้ามี token อยู่แล้ว ให้ติด default header ไว้ก่อน
+const bootToken = getToken();
+if (bootToken) {
+  API.defaults.headers.common.Authorization = `Bearer ${bootToken}`;
+}
+
+// Interceptors (ของเดิมคุณ) ...
+
+// ✅ เพิ่มอันนี้ให้มี export จริง
+/* ============================ Line Content (Image/File) ============================ */
+
+export function getLineContentPath(id: string) {
+  return `/admin/chat/line-content/${encodeURIComponent(id)}`;
+}
+
+export function getLineContentUrl(id: string) {
+  const base = API_BASE || "/api";
+  return withToken(`${base}${getLineContentPath(id)}`);
+}
+
+export async function getLineContentBlob(messageId: string): Promise<Blob> {
+  const res = await API.get(getLineContentPath(messageId), {
+    responseType: "blob",
+  });
+  return res.data as Blob;
+}
+
+export async function fetchLineContentObjectUrl(messageId: string): Promise<{
+  url: string;
+  revoke: () => void;
+  contentType?: string;
+  filename?: string;
+}> {
+  const res = await API.get(getLineContentPath(messageId), {
+    responseType: "blob",
+  });
+
+  const blob = res.data as Blob;
+  const url = URL.createObjectURL(blob);
+
+  const contentType =
+    (res.headers?.["content-type"] as string | undefined) ?? undefined;
+  const cd = res.headers?.["content-disposition"] as string | undefined;
+  const filename = cd?.match(/filename\*?=(?:UTF-8'')?("?)([^";]+)\1/i)?.[2];
+
+  return { url, revoke: () => URL.revokeObjectURL(url), contentType, filename };
+}
+
+export function downloadObjectUrl(url: string, filename?: string) {
+  const a = document.createElement("a");
+  a.href = url;
+  if (filename) a.download = filename;
+  a.target = "_blank";
+  a.rel = "noreferrer";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 API.interceptors.request.use((cfg: InternalAxiosRequestConfig) => {
   const headers = (cfg.headers ?? {}) as AxiosRequestHeaders;
-  accessToken ||= getToken();
-  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
   headers["x-tenant"] = TENANT;
+
   cfg.headers = headers;
   return cfg;
 });
 
 API.interceptors.response.use(
-  (r) => r,
+  (r: AxiosResponse) => {
+    const d: any = r.data;
+    if (d && "items" in d) d.items = toArray(d.items);
+    return r;
+  },
   (err: AxiosError<any>) => {
     const status = err.response?.status;
+
+    // ถ้าโดน 401: เคลียร์ token แล้วเด้งไป login (กัน loop ด้วย)
     if (status === 401) {
       clearToken();
-      accessToken = "";
-      const loc = globalThis.location;
-      if (loc && loc.pathname !== "/login") loc.href = "/login";
+      delete API.defaults.headers.common.Authorization;
+
+      const p = globalThis.location?.pathname || "";
+      if (p !== "/login") globalThis.location?.replace("/login");
     }
+
     return Promise.reject(err);
   }
 );
 
-/* ================================ Utils ================================ */
-
-export function getApiBase() {
-  return API_BASE;
-}
-
 /* ================================= Auth ================================ */
 
+// IMPORTANT: admin login path ต้องเป็น /admin/auth/login (ไม่ใช่ /auth/login)
 export async function login(email: string, password: string) {
-  const r = await API.post<{ ok: boolean; token: string }>("/auth/login", {
-    email,
-    password,
-  });
+  const r = await API.post<{ ok: boolean; token: string }>(
+    "/admin/auth/login",
+    {
+      email,
+      password,
+    }
+  );
+
   if (!r.data?.token) throw new Error("login failed: empty token");
+
   setToken(r.data.token);
-  accessToken = r.data.token;
+  API.defaults.headers.common.Authorization = `Bearer ${r.data.token}`;
+
   return r.data;
 }
 
 export function logoutAndRedirect() {
   clearToken();
-  accessToken = "";
+  delete API.defaults.headers.common.Authorization;
   globalThis.location?.assign("/login");
+}
+
+export async function fetchBlobObjectUrl(url: string): Promise<string> {
+  const r = await API.get(url, { responseType: "blob" });
+  return URL.createObjectURL(r.data);
+}
+
+export async function fetchBlob(url: string) {
+  const r = await API.get(url, { responseType: "blob" });
+  return URL.createObjectURL(r.data);
 }
 
 /* ============================== Bots APIs ============================== */
@@ -468,9 +657,8 @@ export async function initBot(
 }
 
 export async function getBot(botId: string) {
-  return (
-    await API.get<BotGetResponse>(`/bots/${encodeURIComponent(botId)}`)
-  ).data;
+  return (await API.get<BotGetResponse>(`/bots/${encodeURIComponent(botId)}`))
+    .data;
 }
 
 export async function updateBotMeta(
@@ -517,13 +705,13 @@ export async function updateBotSecrets(
   const body: Record<string, string> = {};
 
   if (norm.openaiApiKey && norm.openaiApiKey !== "********")
-    body.openaiApiKey = norm.openaiApiKey.trim();
+    body.openaiApiKey = String(norm.openaiApiKey).trim();
 
   if (norm.lineAccessToken && norm.lineAccessToken !== "********")
-    body.lineAccessToken = norm.lineAccessToken.trim();
+    body.lineAccessToken = String(norm.lineAccessToken).trim();
 
   if (norm.lineChannelSecret && norm.lineChannelSecret !== "********")
-    body.lineChannelSecret = norm.lineChannelSecret.trim();
+    body.lineChannelSecret = String(norm.lineChannelSecret).trim();
 
   return (
     await API.post<BotSecretsSaveResponse>(
@@ -536,9 +724,7 @@ export async function updateBotSecrets(
 /* ----- Roles & Admin users ----- */
 
 export async function listRoles() {
-  const res = await API.get<{ ok: boolean; items: RoleItem[] }>(
-    "/admin/roles"
-  );
+  const res = await API.get<{ ok: boolean; items: RoleItem[] }>("/admin/roles");
   return res.data.items ?? [];
 }
 
@@ -558,13 +744,11 @@ export async function assignRole(adminId: string, roleId: string) {
   ).data;
 }
 
-/** DELETE bot (admin) */
 export async function deleteBot(botId: string) {
   try {
     await API.delete(`/admin/bots/${encodeURIComponent(botId)}`);
     return { ok: true as const };
   } catch {
-    // เผื่อ backend ยังไม่ implement DELETE ให้ไม่พังหน้าเว็บ
     return { ok: true as const, note: "DELETE not implemented on server" };
   }
 }
@@ -572,8 +756,7 @@ export async function deleteBot(botId: string) {
 /* ============================ Stats / Cases ============================ */
 
 export async function getDailyByBot(botId: string) {
-  return (await API.get<DailyResp>("/stats/daily", { params: { botId } }))
-    .data;
+  return (await API.get<DailyResp>("/stats/daily", { params: { botId } })).data;
 }
 
 export async function getRangeByBot(botId: string, from: string, to: string) {
@@ -648,9 +831,7 @@ export async function updateBotIntent(
   }
 ): Promise<BotIntent> {
   const res = await API.put<{ ok: boolean; item: BotIntent }>(
-    `/admin/bots/${encodeURIComponent(botId)}/intents/${encodeURIComponent(
-      id
-    )}`,
+    `/admin/bots/${encodeURIComponent(botId)}/intents/${encodeURIComponent(id)}`,
     payload
   );
   return res.data.item;
@@ -661,9 +842,7 @@ export async function deleteBotIntent(
   id: string
 ): Promise<void> {
   await API.delete(
-    `/admin/bots/${encodeURIComponent(botId)}/intents/${encodeURIComponent(
-      id
-    )}`
+    `/admin/bots/${encodeURIComponent(botId)}/intents/${encodeURIComponent(id)}`
   );
 }
 
@@ -675,7 +854,7 @@ export async function getBotConfig(
   const res = await API.get<BotAiConfigResponse>(
     `/admin/bots/${encodeURIComponent(botId)}/config`
   );
-  return res.data; // { ok, config, allowedModels }
+  return res.data;
 }
 
 export async function updateBotConfig(
@@ -688,115 +867,198 @@ export async function updateBotConfig(
   );
   return res.data;
 }
-
-/* ============================== Chat Center APIs ============================== */
-
-/**
- * GET /api/admin/chat/sessions?botId=...&limit=...
- */
-export async function getChatSessions(
-  botId: string,
-  limit = 50,
-  platform?: string
-): Promise<ChatSession[]> {
-  const res = await API.get<{ ok: boolean; items: ChatSession[] }>(
-    "/admin/chat/sessions",
-    { params: { botId, limit, platform } }
-  );
-  const data = res.data as any;
-  return data.items ?? data.sessions ?? [];
-}
-
-/**
- * GET /api/admin/chat/sessions/:sessionId/messages?limit=...
- */
-export async function getChatMessages(
-  sessionId: string,
-  limit = 100
-): Promise<ChatMessage[]> {
-  const res = await API.get<{ ok: boolean; items: ChatMessage[] }>(
-    `/admin/chat/sessions/${encodeURIComponent(sessionId)}/messages`,
-    { params: { limit } }
-  );
-  const data = res.data as any;
-  const items: ChatMessage[] = data.items ?? data.messages ?? [];
-  return items.map(normalizeChatMessage);
-}
-
-// ตำแหน่งเดิมที่คุณเขียน replyChatSession เอาออกไปเลย แล้วแทนด้วยโค้ดนี้
-
-export type ReplyChatSessionResponse = {
-  ok: boolean;
-  message?: ChatMessage;
-  error?: string;
-};
-
-export async function replyChatSession(
-  sessionId: string,
-  payload: {
-    text?: string;
-    type?: MessageType | string;
-    attachmentUrl?: string;
-    attachmentMeta?: unknown;
-  }
-): Promise<ReplyChatSessionResponse> {
-  const res = await API.post<ReplyChatSessionResponse>(
-    `/admin/chat/sessions/${encodeURIComponent(sessionId)}/reply`,
-    payload
-  );
-
+async function apiGet<T = any>(url: string): Promise<T> {
+  // กันคนเผลอส่ง /api/... เข้ามา
+  const path = url.startsWith("/api/") ? url.slice(4) : url;
+  const res = await API.get<T>(path);
   return res.data;
 }
 
-export type RichMessagePayload = {
+/* ============================== Chat Center APIs ============================== */
+
+export async function getChatSessions(
+  botId: string,
+  limit = 50,
+  platform?: string,
+  opts?: {
+    status?: string;
+    isIssue?: boolean;
+    q?: string;
+    dateFrom?: string;
+    dateTo?: string;
+  }
+): Promise<ChatSession[]> {
+  const res = await API.get<{ ok: boolean; items: ChatSession[] }>(
+    "/admin/chat/sessions",
+    {
+      params: {
+        botId,
+        limit,
+        platform,
+        status: opts?.status,
+        isIssue: opts?.isIssue != null ? String(opts.isIssue) : undefined,
+        q: opts?.q,
+        dateFrom: opts?.dateFrom,
+        dateTo: opts?.dateTo,
+      },
+    }
+  );
+
+  const data: any = res.data;
+  const rawItems = toArray<ChatSession>(data.items).length
+    ? data.items
+    : toArray<ChatSession>(data.sessions);
+
+  return toArray<ChatSession>(rawItems).map((s: any) => ({
+    ...s,
+    hasProblem: s.hasProblem ?? s.isIssue ?? false,
+    isIssue: s.hasProblem ?? s.isIssue ?? false,
+  }));
+} // <-- เพิ่มบรรทัดนี้ เพื่อปิด getChatSessions
+
+export async function getChatMessages(
+  sessionId: string,
+  limit = 50,
+  before?: string
+): Promise<any> {
+  if (!sessionId) throw new Error("missing_sessionId");
+  const res = await API.get("/admin/chat/messages", {
+    params: { sessionId, limit },
+  });
+  const items = toArray(res.data.items).length
+    ? res.data.items
+    : toArray(res.data.messages);
+  return { ...res.data, items: toArray(items) };
+}
+
+export async function getChatMessagesByQuery(params: {
+  conversationId?: string;
+  sessionId?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<{ items: ChatMessage[]; conversationId: string | null }> {
+  const res = await API.get<{
+    ok: boolean;
+    items: ChatMessage[];
+    conversationId: string | null;
+  }>("/admin/chat/messages", {
+    params: {
+      conversationId: params.conversationId,
+      sessionId: params.sessionId,
+      limit: params.limit ?? 200,
+      offset: params.offset ?? 0,
+    },
+  });
+
+  return {
+    conversationId: res.data.conversationId,
+    items: (res.data.items ?? []).map(normalizeChatMessage),
+  };
+}
+
+export type ReplyChatSessionResponse = {
+  ok: boolean;
+  delivered?: boolean;
+  messageId?: string;
+  error?: string;
+};
+export type SendRichMessagePayload = {
   sessionId: string;
   platform?: string;
   title: string;
   body: string;
   imageUrl?: string;
-  buttons?: Array<{ label: string; action: "uri" | "message" | "postback"; value: string }>;
-  inlineKeyboard?: Array<Array<{ text: string; callbackData: string }>>;
   altText?: string;
+  buttons?: Array<{ label: string; action: string; value: string }>;
+  inlineKeyboard?: Array<Array<{ text: string; callbackData: string }>>;
 };
 
-export async function sendRichMessage(payload: RichMessagePayload) {
-  const res = await API.post<{ ok: boolean; messageId?: string }>(
-    "/admin/chat/rich-message",
+export async function sendRichMessage(
+  payload: SendRichMessagePayload
+): Promise<{
+  ok: boolean;
+  delivered?: boolean;
+  messageId?: string;
+  error?: string;
+}> {
+  const sessionId = payload.sessionId?.trim();
+  if (!sessionId) throw new Error("missing_sessionId");
+
+  // ถ้า backend ของคุณใช้ path อื่น ให้แก้ “บรรทัดนี้บรรทัดเดียว”
+  const res = await API.post(
+    `/admin/chat/sessions/${encodeURIComponent(sessionId)}/rich`,
+    payload
+  );
+  return res.data as any;
+}
+
+export async function replyChatSession(
+  sessionId: string,
+  payload: {
+    text: string;
+    type?: string;
+    attachmentUrl?: string;
+    attachmentMeta?: unknown;
+  }
+): Promise<ReplyChatSessionResponse> {
+  const id = sessionId?.trim();
+  if (!id) throw new Error("missing_sessionId");
+
+  const res = await API.post<ReplyChatSessionResponse>(
+    `/admin/chat/sessions/${encodeURIComponent(id)}/reply`,
     payload
   );
   return res.data;
 }
 
-export async function searchChatMessages(params: {
-  q: string;
-  botId?: string | null;
-  platform?: string;
-  userId?: string;
-  limit?: number;
-}): Promise<ChatMessage[]> {
-  const res = await API.get<{ ok: boolean; items: ChatMessage[] }>(
-    "/admin/chat/search",
-    {
-      params: {
-        q: params.q,
-        botId: params.botId || undefined,
-        platform: params.platform,
-        userId: params.userId,
-        limit: params.limit,
-      },
-    }
+export type ChatSessionUpdateResponse = {
+  ok: boolean;
+  session: ChatSession;
+};
+
+export async function updateChatSession(
+  sessionId: string,
+  payload: Partial<{
+    displayName: string;
+    adminNote: string | null;
+    tags: string[];
+  }>
+): Promise<ChatSessionUpdateResponse> {
+  const id = sessionId?.trim();
+  if (!id) throw new Error("missing_sessionId");
+
+  const res = await API.patch<ChatSessionUpdateResponse>(
+    `/admin/chat/sessions/${encodeURIComponent(id)}`,
+    payload
   );
-  const data = res.data as any;
-  const items: ChatMessage[] = data.items ?? [];
-  return items.map(normalizeChatMessage);
+  return res.data;
+}
+
+export async function updateChatSessionMeta(
+  sessionId: string,
+  payload: {
+    status?: string;
+    tags?: any; // จะ string หรือ array ให้ยืดหยุ่นไปก่อน
+    hasProblem?: boolean;
+    unread?: number;
+  }
+): Promise<{ ok: boolean }> {
+  const res = await API.patch<{ ok: boolean }>(
+    `/admin/chat/sessions/${encodeURIComponent(sessionId)}/meta`,
+    payload
+  );
+  return res.data;
 }
 
 /* =========================== FAQ & Engagement =========================== */
 
 export async function getFaqEntries(botId: string): Promise<FaqEntry[]> {
-  const res = await API.get<{ ok: boolean; items: FaqEntry[] }>("/admin/faq", {
-    params: { botId },
-  });
+  const res = await API.get<{ ok: boolean; items: FaqEntry[] }>(
+    "/admin/bot/faq",
+    {
+      params: { botId },
+    }
+  );
   const data = res.data as any;
   return data.items ?? [];
 }
@@ -808,28 +1070,41 @@ export async function createFaqEntry(payload: {
   keywords?: string[] | null;
   enabled?: boolean;
 }): Promise<FaqEntry> {
-  const res = await API.post<{ ok: boolean; item: FaqEntry }>("/admin/faq", payload);
-  return (res.data as any).item ?? res.data;
+  const res = await API.post<{ ok: boolean; item: FaqEntry }>(
+    "/admin/bot/faq",
+    payload
+  );
+  return (res.data as any).item ?? (res.data as any);
 }
 
-export async function updateFaqEntry(id: string, payload: Partial<FaqEntry>): Promise<FaqEntry> {
-  const res = await API.patch<{ ok: boolean; item: FaqEntry }>(
-    `/admin/faq/${encodeURIComponent(id)}`,
-    payload,
+export async function updateFaqEntry(
+  id: string,
+  payload: Partial<FaqEntry>
+): Promise<FaqEntry> {
+  const res = await API.put<{ ok: boolean; item: FaqEntry }>(
+    `/admin/bot/faq/${encodeURIComponent(id)}`,
+    payload
   );
-  return (res.data as any).item ?? res.data;
+  return (res.data as any).item ?? (res.data as any);
 }
 
 export async function deleteFaqEntry(id: string): Promise<void> {
-  await API.delete(`/admin/faq/${encodeURIComponent(id)}`);
+  await API.delete(`/admin/bot/faq/${encodeURIComponent(id)}`);
 }
 
-export async function getEngagementMessages(botId: string): Promise<EngagementMessage[]> {
-  const res = await API.get<{ ok: boolean; items: EngagementMessage[] }>("/admin/engagement", {
-    params: { botId },
-  });
-  const data = res.data as any;
-  return data.items ?? [];
+export async function getEngagementMessages(
+  botId: string
+): Promise<EngagementMessage[]> {
+  try {
+    const res = await API.get<{ ok: boolean; items: EngagementMessage[] }>(
+      "/admin/bot/engagement",
+      { params: { botId } }
+    );
+    return (res.data as any).items ?? [];
+  } catch (e: any) {
+    if (e?.response?.status === 404) return [];
+    throw e;
+  }
 }
 
 export async function createEngagementMessage(payload: {
@@ -842,25 +1117,30 @@ export async function createEngagementMessage(payload: {
   meta?: unknown;
 }): Promise<EngagementMessage> {
   const res = await API.post<{ ok: boolean; item: EngagementMessage }>(
-    "/admin/engagement",
-    payload,
+    "/admin/bot/engagement",
+    {
+      ...payload,
+      // ถ้า backend ของคุณใช้ field ชื่อ interval ให้ส่งเพิ่มไปด้วย
+      interval: payload.intervalMinutes,
+    }
   );
-  return (res.data as any).item ?? res.data;
+  return (res.data as any).item ?? (res.data as any);
 }
 
+// เปลี่ยนเป็น /admin/bot/engagement/:id
 export async function updateEngagementMessage(
   id: string,
-  payload: Partial<EngagementMessage>,
-): Promise<EngagementMessage> {
-  const res = await API.patch<{ ok: boolean; item: EngagementMessage }>(
-    `/admin/engagement/${encodeURIComponent(id)}`,
-    payload,
+  payload: Partial<EngagementMessage>
+) {
+  const res = await API.patch(
+    `/admin/bot/engagement/${encodeURIComponent(id)}`,
+    payload
   );
-  return (res.data as any).item ?? res.data;
+  return (res.data as any).item ?? (res.data as any);
 }
 
 export async function deleteEngagementMessage(id: string): Promise<void> {
-  await API.delete(`/admin/engagement/${encodeURIComponent(id)}`);
+  await API.delete(`/admin/bot/engagement/${encodeURIComponent(id)}`);
 }
 
 /* ============================== Knowledge APIs ============================== */
@@ -877,7 +1157,10 @@ export async function listKnowledgeDocs(params?: {
   return res.data;
 }
 
-export async function getKnowledgeDoc(id: string): Promise<{ ok: boolean; item: KnowledgeDocDetail }> {
+export async function getKnowledgeDoc(id: string): Promise<{
+  ok: boolean;
+  item: KnowledgeDocDetail;
+}> {
   const res = await API.get<{ ok: boolean; item: KnowledgeDocDetail }>(
     `/admin/ai/knowledge/docs/${encodeURIComponent(id)}`
   );
@@ -890,16 +1173,34 @@ export async function createKnowledgeDoc(payload: {
   body?: string;
   status?: string;
 }): Promise<{ ok: boolean; item: KnowledgeDoc }> {
+  const title = (payload.title ?? "").trim();
+  const body = (payload.body ?? "").toString().trim();
+
+  if (!title) throw new Error("title_required");
+  if (!body) throw new Error("body_required"); // กัน 400 ตั้งแต่ FE
+
+  const safe = {
+    title,
+    body,
+    tags: payload.tags?.trim() || undefined,
+    status: payload.status ?? "active",
+  };
+
   const res = await API.post<{ ok: boolean; item: KnowledgeDoc }>(
     "/admin/ai/knowledge/docs",
-    payload
+    safe
   );
   return res.data;
 }
 
 export async function updateKnowledgeDoc(
   id: string,
-  payload: Partial<{ title: string; tags?: string; body?: string; status?: string }>
+  payload: Partial<{
+    title: string;
+    tags?: string;
+    body?: string;
+    status?: string;
+  }>
 ): Promise<{ ok: boolean; item: KnowledgeDoc }> {
   const res = await API.patch<{ ok: boolean; item: KnowledgeDoc }>(
     `/admin/ai/knowledge/docs/${encodeURIComponent(id)}`,
@@ -913,7 +1214,9 @@ export async function deleteKnowledgeDoc(id: string) {
   return { ok: true as const };
 }
 
-export async function listKnowledgeChunks(docId: string): Promise<{ ok: boolean; items: KnowledgeChunk[] }> {
+export async function listKnowledgeChunks(
+  docId: string
+): Promise<{ ok: boolean; items: KnowledgeChunk[] }> {
   const res = await API.get<{ ok: boolean; items: KnowledgeChunk[] }>(
     `/admin/ai/knowledge/docs/${encodeURIComponent(docId)}/chunks`
   );
@@ -933,7 +1236,11 @@ export async function createKnowledgeChunk(
 
 export async function updateKnowledgeChunk(
   chunkId: string,
-  payload: Partial<{ content: string; tokens?: number; embedding?: unknown }>
+  payload: Partial<{
+    content: string;
+    tokens?: number;
+    embedding?: unknown;
+  }>
 ): Promise<{ ok: boolean; item: KnowledgeChunk }> {
   const res = await API.patch<{ ok: boolean; item: KnowledgeChunk }>(
     `/admin/ai/knowledge/chunks/${encodeURIComponent(chunkId)}`,
@@ -963,9 +1270,10 @@ export async function getBotKnowledge(botId: string): Promise<{
 }
 
 export async function addBotKnowledge(botId: string, docId: string) {
-  await API.post(`/admin/ai/knowledge/bots/${encodeURIComponent(botId)}/knowledge`, {
-    docId,
-  });
+  await API.post(
+    `/admin/ai/knowledge/bots/${encodeURIComponent(botId)}/knowledge`,
+    { docId }
+  );
   return { ok: true as const };
 }
 
@@ -984,7 +1292,10 @@ export async function lepHealth() {
   return (await API.get<LepHealthResponse>("/admin/lep/health")).data;
 }
 
-export async function lepListCampaigns(params?: { page?: number; pageSize?: number }) {
+export async function lepListCampaigns(params?: {
+  page?: number;
+  pageSize?: number;
+}) {
   return (
     await API.get<LepCampaignResponse>("/admin/lep/campaigns", { params })
   ).data;
@@ -995,15 +1306,15 @@ export async function lepCreateCampaign(payload: {
   message: string;
   targets?: any;
 }) {
-  return (
-    await API.post<LepCampaignResponse>("/admin/lep/campaigns", payload)
-  ).data;
+  return (await API.post<LepCampaignResponse>("/admin/lep/campaigns", payload))
+    .data;
 }
 
 export async function lepQueueCampaign(id: string) {
   return (
     await API.post<LepCampaignResponse>(
-      `/admin/lep/campaigns/${encodeURIComponent(id)}/queue`
+      `/admin/lep/campaigns/${encodeURIComponent(id)}/queue`,
+      {}
     )
   ).data;
 }
@@ -1029,37 +1340,63 @@ export async function lepGetCampaignStatus(id: string) {
 
 export async function lepListCampaignSchedules(campaignId: string) {
   return (
-    await API.get<{ ok: boolean; data: { campaignId: string; schedules: LepCampaignSchedule[] } }>(
-      `/admin/lep/campaigns/${encodeURIComponent(campaignId)}/schedules`,
-    )
+    await API.get<{
+      ok: boolean;
+      data: { campaignId: string; schedules: LepCampaignSchedule[] };
+    }>(`/admin/lep/campaigns/${encodeURIComponent(campaignId)}/schedules`)
   ).data;
 }
 
 export async function lepCreateCampaignSchedule(
   campaignId: string,
-  payload: { cron: string; timezone: string; startAt?: string; endAt?: string; idempotencyKey?: string },
+  payload: {
+    cron: string;
+    timezone: string;
+    startAt?: string;
+    endAt?: string;
+    idempotencyKey?: string;
+  }
 ) {
   return (
-    await API.post(`/admin/lep/campaigns/${encodeURIComponent(campaignId)}/schedules`, payload)
+    await API.post(
+      `/admin/lep/campaigns/${encodeURIComponent(campaignId)}/schedules`,
+      payload
+    )
   ).data as any;
 }
 
 export async function lepUpdateCampaignSchedule(
   campaignId: string,
   scheduleId: string,
-  payload: Partial<{ cron: string; timezone: string; startAt?: string | null; endAt?: string | null; enabled?: boolean; idempotencyKey?: string }>,
+  payload: Partial<{
+    cron: string;
+    timezone: string;
+    startAt?: string | null;
+    endAt?: string | null;
+    enabled?: boolean;
+    idempotencyKey?: string;
+  }>
 ) {
   return (
     await API.patch(
-      `/admin/lep/campaigns/${encodeURIComponent(campaignId)}/schedules/${encodeURIComponent(scheduleId)}`,
-      payload,
+      `/admin/lep/campaigns/${encodeURIComponent(campaignId)}/schedules/${encodeURIComponent(
+        scheduleId
+      )}`,
+      payload
     )
   ).data as any;
 }
 
-export async function lepDeleteCampaignSchedule(campaignId: string, scheduleId: string) {
+export async function lepDeleteCampaignSchedule(
+  campaignId: string,
+  scheduleId: string
+) {
   return (
-    await API.delete(`/admin/lep/campaigns/${encodeURIComponent(campaignId)}/schedules/${encodeURIComponent(scheduleId)}`)
+    await API.delete(
+      `/admin/lep/campaigns/${encodeURIComponent(campaignId)}/schedules/${encodeURIComponent(
+        scheduleId
+      )}`
+    )
   ).data as any;
 }
 
@@ -1093,15 +1430,114 @@ export async function createLivePoll(payload: {
 }
 
 export async function getLiveSummary() {
-  return (await API.get<{ ok: boolean; streams: LiveStream[] }>("/admin/telegram/live/summary")).data;
+  return (
+    await API.get<{ ok: boolean; streams: LiveStream[] }>(
+      "/admin/telegram/live/summary"
+    )
+  ).data;
 }
 
+export type AdminUploadResult = {
+  ok: true;
+  url: string;
+  fileName: string;
+  mime: string;
+  size: number;
+};
+
+export async function uploadAdminUpload(
+  file: File
+): Promise<AdminUploadResult> {
+  const fd = new FormData();
+  fd.append("file", file, file.name);
+
+  // ใช้ axios instance เดิมของโปรเจกต์ (API)
+  const r = await API.post(`/admin/uploads`, fd, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+
+  if (!r.data?.ok) throw new Error(r.data?.message || "upload_failed");
+  return r.data as AdminUploadResult;
+}
+
+export async function searchChatMessages(params: {
+  q: string;
+  botId?: string | null;
+  sessionId?: string | null;
+  conversationId?: string | null;
+  limit?: number;
+  offset?: number;
+}): Promise<{ items: ChatMessage[]; conversationId: string | null }> {
+  const res = await API.get("/admin/chat/messages", {
+    params: {
+      q: params.q,
+      botId: params.botId ?? undefined,
+      sessionId: params.sessionId ?? undefined,
+      conversationId: params.conversationId ?? undefined,
+      limit: params.limit ?? 200,
+      offset: params.offset ?? 0,
+    },
+  });
+
+  const data: any = res.data;
+  const items = (data.items ?? data.messages ?? []).map(normalizeChatMessage);
+
+  return {
+    conversationId: data.conversationId ?? null,
+    items,
+  };
+}
+// ===================== DailyRule / CodePool =====================
+
+export type RuleStockResponse = {
+  ok: true;
+  ruleId: string;
+  available: number;
+  used: number;
+  total: number;
+};
+
+export async function getRuleStock(ruleId: string) {
+  const { data } = await API.get<RuleStockResponse>(
+    `/admin/rules/${ruleId}/stock`
+  );
+  return data;
+}
+
+export async function generateRuleCodes(
+  ruleId: string,
+  payload: { count: number; prefix?: string; digits?: number }
+) {
+  const { data } = await API.post<{
+    ok: true;
+    ruleId: string;
+    generated: number;
+  }>(`/admin/rules/${ruleId}/codepool/generate`, payload);
+  return data;
+}
+
+// ส่งเป็น codesText (string) เท่านั้น
+export async function importRuleCodes(ruleId: string, codesText: string) {
+  const { data } = await API.post<{
+    ok: true;
+    ruleId: string;
+    input: number;
+    uniqueInput: number;
+    imported: number;
+    duplicated: number;
+  }>(`/admin/rules/${ruleId}/codepool/import`, { codesText });
+  return data;
+}
 
 /* ============================= Helper bundle ============================ */
 
 export const api = {
   base: getApiBase(),
   health: async () => (await API.get<Health>("/health")).data,
+
+  // Auth
+  login,
+  logoutAndRedirect,
 
   // Stats
   daily: getDailyByBot,
@@ -1136,7 +1572,14 @@ export const api = {
   // Chat Center
   getChatSessions,
   getChatMessages,
+  getChatMessagesByQuery,
   replyChatSession,
+  searchChatMessages: getChatMessagesByQuery,
+  updateChatSession,
+  updateChatSessionMeta,
+  sendRichMessage,
+
+  // FAQ & Engagement
   getFaqEntries,
   createFaqEntry,
   updateFaqEntry,
@@ -1145,4 +1588,38 @@ export const api = {
   createEngagementMessage,
   updateEngagementMessage,
   deleteEngagementMessage,
+
+  // Knowledge
+  listKnowledgeDocs,
+  getKnowledgeDoc,
+  createKnowledgeDoc,
+  updateKnowledgeDoc,
+  deleteKnowledgeDoc,
+  listKnowledgeChunks,
+  createKnowledgeChunk,
+  updateKnowledgeChunk,
+  deleteKnowledgeChunk,
+  getBotKnowledge,
+  addBotKnowledge,
+  removeBotKnowledge,
+
+  // LEP
+  lepHealth,
+  lepListCampaigns,
+  lepCreateCampaign,
+  lepQueueCampaign,
+  lepGetCampaign,
+  lepGetCampaignStatus,
+  lepListCampaignSchedules,
+  lepCreateCampaignSchedule,
+  lepUpdateCampaignSchedule,
+  lepDeleteCampaignSchedule,
+
+  // Live
+  startTelegramLive,
+  submitLiveQuestion,
+  createLivePoll,
+  getLiveSummary,
 };
+
+/* ============================== Knowledge Types ============================== */

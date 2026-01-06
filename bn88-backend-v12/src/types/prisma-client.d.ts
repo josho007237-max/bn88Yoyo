@@ -35,3 +35,4 @@ declare module '@prisma/client' {
   };
   export type MessageType = (typeof MessageType)[keyof typeof MessageType];
 }
+

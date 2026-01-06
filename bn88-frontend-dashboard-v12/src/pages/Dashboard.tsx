@@ -10,7 +10,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { api, type Health, type DailyResp, type CaseItem } from "../lib/api";
-import { connectEvents } from "../lib/events";
+import connectEvents from "../lib/events";
 import { BotSwitcher } from "@/components/BotSwitcher";
 
 const TENANT = import.meta.env.VITE_TENANT ?? "bn9";
@@ -152,10 +152,7 @@ export default function Dashboard() {
     ];
   }, [daily]);
 
-  const todayKey = useMemo(
-    () => new Date().toISOString().slice(0, 10),
-    []
-  );
+  const todayKey = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
   return (
     <div className="min-h-screen bg-[#111214] text-zinc-100 p-6">
@@ -214,13 +211,13 @@ export default function Dashboard() {
 
         {/* Chart */}
         <Card title="Daily Overview (today)">
-          <div className="h-72" style={{ minHeight: 300 }}>
+          <div className="w-full h-[300px] min-h-[300px]">
             {chartData.length === 0 ? (
               <div className="h-full grid place-items-center text-sm opacity-60">
                 ยังไม่มีข้อมูลวันนี้
               </div>
             ) : (
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer width="100%" height={280}>
                 <LineChart data={chartData}>
                   <CartesianGrid strokeDasharray="4 4" />
                   <XAxis dataKey="date" />
@@ -234,6 +231,7 @@ export default function Dashboard() {
               </ResponsiveContainer>
             )}
           </div>
+
           <div className="mt-2 text-center text-xs opacity-60">
             • total • text • follow • unfollow
           </div>

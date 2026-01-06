@@ -1,4 +1,5 @@
-import { MessageType } from "@prisma/client";
+import { toJsonValue as normalizeJson } from "../../lib/jsonValue.js";
+import { Prisma, MessageType } from "@prisma/client";
 import { enqueueRateLimitedSend } from "../../queues/message.queue";
 import { recordDeliveryMetric } from "../../routes/metrics.live";
 import { sendTelegramMessage } from "../telegram";
@@ -11,6 +12,9 @@ import {
   SendMessageAction,
 } from "./types";
 import { normalizeActionMessage, safeBroadcast } from "./utils";
+
+/** Convert unknown -> Prisma.JsonValue (JSON-safe) */
+const toJson = (v: unknown) => normalizeJson(v);
 
 async function sendLinePushMessage(args: {
   channelAccessToken?: string | null;
@@ -32,7 +36,10 @@ async function sendLinePushMessage(args: {
       previewImageUrl: payload.attachmentUrl,
     });
   } else if (payload.type === MessageType.FILE && payload.attachmentUrl) {
-    messages.push({ type: "text", text: payload.text || payload.attachmentUrl });
+    messages.push({
+      type: "text",
+      text: payload.text || payload.attachmentUrl,
+    });
   } else if (payload.type === MessageType.STICKER) {
     messages.push({ type: "text", text: payload.text || "[sticker]" });
   } else if (payload.type === MessageType.SYSTEM) {
@@ -63,12 +70,16 @@ async function sendTelegramPayload(args: {
 
   const options = {
     photoUrl:
-      payload.type === MessageType.IMAGE ? payload.attachmentUrl ?? undefined : undefined,
+      payload.type === MessageType.IMAGE
+        ? (payload.attachmentUrl ?? undefined)
+        : undefined,
     documentUrl:
-      payload.type === MessageType.FILE ? payload.attachmentUrl ?? undefined : undefined,
+      payload.type === MessageType.FILE
+        ? (payload.attachmentUrl ?? undefined)
+        : undefined,
     documentName:
       payload.type === MessageType.FILE
-        ? (payload.attachmentMeta as any)?.fileName ?? undefined
+        ? ((payload.attachmentMeta as any)?.fileName ?? undefined)
         : undefined,
   };
 
@@ -90,29 +101,33 @@ type SendDeps = typeof defaultDeps;
 export async function executeSendAction(
   action: SendMessageAction,
   ctx: ActionContext,
-  deps: SendDeps = defaultDeps,
+  deps: SendDeps = defaultDeps
 ): Promise<ActionExecutionResult> {
   const { bot, session, platform, userId, log } = ctx;
+
   const normalized = normalizeActionMessage(
     action.message,
-    action.message.attachmentUrl ? "attachment" : "",
+    action.message.attachmentUrl ? "attachment" : ""
   );
 
   try {
     const now = new Date();
+
     const botChatMessage = await deps.prisma.chatMessage.create({
       data: {
         tenant: bot.tenant,
         botId: bot.id,
         platform,
         sessionId: session.id,
-        conversationId: ctx.conversation?.id,
+        conversationId: ctx.conversation?.id ?? null,
         senderType: "bot",
         type: normalized.type,
         text: normalized.text || "",
         attachmentUrl: normalized.attachmentUrl ?? null,
-        attachmentMeta: normalized.attachmentMeta ?? undefined,
-        meta: { source: platform, via: "action" },
+        attachmentMeta: normalized.attachmentMeta
+          ? toJson(normalized.attachmentMeta)
+          : undefined,
+        meta: toJson({ source: platform, via: "action" }),
       },
       select: {
         id: true,
@@ -132,14 +147,6 @@ export async function executeSendAction(
         lastText: normalized.text || normalized.attachmentUrl || undefined,
         lastDirection: "bot",
       },
-    });
-
-    deps.safeBroadcast({
-      type: "chat:message:new",
-      tenant: bot.tenant,
-      botId: bot.id,
-      sessionId: session.id,
-      message: botChatMessage,
     });
 
     const rateLimited = await deps.enqueueRateLimitedSend({
@@ -165,9 +172,15 @@ export async function executeSendAction(
       },
     });
 
-    const delivered = rateLimited.scheduled ? false : Boolean(rateLimited.result);
+    const delivered = rateLimited.scheduled
+      ? false
+      : Boolean(rateLimited.result);
 
-    deps.recordDeliveryMetric(`${platform}:${bot.id}`, delivered, ctx.requestId);
+    deps.recordDeliveryMetric(
+      `${platform}:${bot.id}`,
+      delivered,
+      ctx.requestId
+    );
 
     if (rateLimited.scheduled) {
       log.warn("[action] send_message rate-limited", {

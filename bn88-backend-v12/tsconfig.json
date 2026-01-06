@@ -1,23 +1,22 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "CommonJS",
-    "moduleResolution": "node",
-    "baseUrl": "src",
+    "module": "Node16",
+    "moduleResolution": "Node16",
     "lib": ["ES2022"],
     "types": ["node"],
-    "typeRoots": ["./src/types", "./node_modules/@types"],
+
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "forceConsistentCasingInFileNames": true,
+
     "strict": false,
     "skipLibCheck": true,
-    "outDir": "dist",
     "resolveJsonModule": true,
-    "isolatedModules": false,
     "allowJs": false,
-    "noEmit": true
+
+    "outDir": "dist"
   },
-  "include": ["src", "src/types"],
-  "exclude": ["node_modules", "dist"]
+  "include": ["src"],
+  "exclude": ["node_modules", "dist", "tests", "src/types"]
 }

@@ -1,23 +1,37 @@
+// src/middleware/basicAuth.ts
 import type { Request, Response, NextFunction } from "express";
 import { prisma } from "../lib/prisma";
 import { createRequestLogger, getRequestId } from "../utils/logger";
 
-export type PermissionName =
-  | "manageBots"
-  | "manageCampaigns"
-  | "viewReports";
+export type PermissionName = "manageBots" | "manageCampaigns" | "viewReports";
 
+// ✅ map แบบไม่สนตัวพิมพ์ใหญ่/เล็ก
 const ROLE_PERMISSIONS: Record<string, PermissionName[]> = {
-  Admin: ["manageBots", "manageCampaigns", "viewReports"],
-  Editor: ["manageBots", "manageCampaigns", "viewReports"],
-  Viewer: ["viewReports"],
+  admin: ["manageBots", "manageCampaigns", "viewReports"],
+  editor: ["manageBots", "manageCampaigns", "viewReports"],
+  viewer: ["viewReports"],
+  // superadmin จะ bypass ทั้งหมดใน requirePermission
+  superadmin: ["manageBots", "manageCampaigns", "viewReports"],
 };
+
+type AuthFromGuard = {
+  sub?: string; // userId ถูกเก็บใน sub (มาจาก subject ตอน signJwt)
+  id?: string;  // เผื่อบางที่ใช้ id
+  email?: string;
+  roles?: string[];
+  permissions?: string[];
+  tokenType?: string;
+  [key: string]: any;
+};
+
+function norm(v: unknown): string {
+  return String(v ?? "").trim().toLowerCase();
+}
 
 function permissionsFromRoles(roles?: string[]): Set<PermissionName> {
   const set = new Set<PermissionName>();
-  if (!roles) return set;
-  roles.forEach((r: string) => {
-    const mapped = ROLE_PERMISSIONS[r];
+  (roles ?? []).forEach((r) => {
+    const mapped = ROLE_PERMISSIONS[norm(r)];
     if (mapped) mapped.forEach((p) => set.add(p));
   });
   return set;
@@ -27,6 +41,7 @@ async function collectPermissions(adminId: string): Promise<Set<string>> {
   const hasDelegates =
     typeof (prisma as any).adminUserRole?.findMany === "function" &&
     typeof (prisma as any).rolePermission?.findMany === "function";
+
   if (!hasDelegates) return new Set<string>();
 
   const user = await prisma.adminUser.findUnique({
@@ -34,17 +49,15 @@ async function collectPermissions(adminId: string): Promise<Set<string>> {
     include: {
       roles: {
         include: {
-          role: {
-            include: { permissions: { include: { permission: true } } },
-          },
+          role: { include: { permissions: { include: { permission: true } } } },
         },
       },
     },
   });
 
   const set = new Set<string>();
-  user?.roles.forEach((link: any) => {
-    link.role.permissions.forEach((rp: any) => {
+  user?.roles?.forEach((link: any) => {
+    link.role?.permissions?.forEach((rp: any) => {
       if (rp.permission?.name) set.add(rp.permission.name);
     });
   });
@@ -56,22 +69,35 @@ export function requirePermission(required: PermissionName[]) {
     const requestId = getRequestId(req);
     const log = createRequestLogger(requestId);
 
-    if (!req.admin?.id) {
+    // ✅ ใช้ auth ที่ authGuard ใส่ไว้ (แทนการ verify token ซ้ำ)
+    const auth = ((req as any).auth ?? (req as any).admin) as AuthFromGuard | undefined;
+
+    const adminId = auth?.sub || auth?.id; // ✅ รองรับ sub เป็นหลัก
+    const roles = (auth?.roles ?? []).map((r) => String(r));
+
+    if (!adminId) {
       return res.status(401).json({ ok: false, message: "unauthorized" });
     }
 
+    const rolesLower = new Set(roles.map(norm));
+
+    // ✅ superadmin ผ่านทุก permission
+    if (rolesLower.has("superadmin")) return next();
+
     try {
-      const claimPerms = permissionsFromRoles(req.admin.roles);
+      // 1) เช็คจาก role ใน token ก่อน (เร็ว)
+      const claimPerms = permissionsFromRoles(roles);
       if (claimPerms.size > 0 && required.some((perm) => claimPerms.has(perm))) {
         return next();
       }
 
+      // 2) ถ้ายังไม่พอ → เช็คจาก DB (RBAC)
       const canCheckDb =
         typeof (prisma as any).role?.count === "function" &&
         typeof (prisma as any).adminUserRole?.count === "function";
 
       if (canCheckDb) {
-        // Backward compatibility: if no roles/assignments are configured, allow all.
+        // โหมด dev: ถ้ายังไม่มี role/assignment เลย ให้ผ่าน
         const [totalRoles, totalAssignments] = await Promise.all([
           prisma.role.count(),
           prisma.adminUserRole.count(),
@@ -79,15 +105,15 @@ export function requirePermission(required: PermissionName[]) {
         if (totalRoles === 0 || totalAssignments === 0) return next();
       }
 
-      const granted = await collectPermissions(req.admin.id);
+      const granted = await collectPermissions(String(adminId));
       if (granted.size === 0) {
-        log.warn("RBAC deny: no permissions for admin", req.admin.id);
+        log.warn("RBAC deny: no permissions for admin", adminId);
         return res.status(403).json({ ok: false, message: "forbidden" });
       }
 
       const ok = required.some((perm) => granted.has(perm));
       if (!ok) {
-        log.warn("RBAC deny: missing permission", { required, adminId: req.admin.id });
+        log.warn("RBAC deny: missing permission", { required, adminId });
         return res.status(403).json({ ok: false, message: "forbidden" });
       }
 
@@ -98,3 +124,4 @@ export function requirePermission(required: PermissionName[]) {
     }
   };
 }
+

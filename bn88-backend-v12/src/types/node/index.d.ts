@@ -7,3 +7,4 @@ interface BufferConstructor {
 }
 declare var Buffer: BufferConstructor;
 export {};
+

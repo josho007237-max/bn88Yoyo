@@ -1,16 +1,33 @@
 // src/hooks/useTenantSSE.ts
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
+import { subscribeTenantEvents, type Unsubscribe } from "../lib/events";
 
-export function useTenantSSE(tenant: string, onEvent: (ev: { type: string; payload: any }) => void) {
+export default function useTenantSSE(
+  tenant: string | undefined | null,
+  onMessage?: (data: any) => void
+) {
+  const unsubRef = useRef<Unsubscribe | null>(null);
+
   useEffect(() => {
-    const es = new EventSource(`/api/live/${tenant}`);
-    es.onmessage = (e) => {
-      const data = JSON.parse(e.data);
-      onEvent(data);
+    // cleanup previous
+    if (unsubRef.current) {
+      unsubRef.current();
+      unsubRef.current = null;
+    }
+
+    if (!tenant) return;
+
+    // legacy-friendly: can pass function directly
+    const unsub = subscribeTenantEvents(tenant, onMessage ?? (() => {}));
+    unsubRef.current = unsub;
+
+    return () => {
+      if (unsubRef.current) {
+        unsubRef.current();
+        unsubRef.current = null;
+      }
     };
-    es.onerror = () => {
-      console.warn("SSE error, will auto-reconnect");
-    };
-    return () => es.close();
-  }, [tenant, onEvent]);
+  }, [tenant, onMessage]);
+
+  return unsubRef;
 }

@@ -1,13 +1,19 @@
 // src/services/inbound/processIncomingMessage.ts
-
+import { toJsonValue as normalizeJson } from "../../lib/jsonValue.js";
+import { MessageType, Prisma } from "@prisma/client";
 import { prisma } from "../../lib/prisma";
 import { getOpenAIClientForBot } from "../openai/getOpenAIClientForBot";
-import { MessageType } from "@prisma/client";
+import {
+  detectReplyLang,
+  langLabel,
+  fallbackNeedMoreInfo,
+  fallbackSystemError,
+} from "../../utils/detectLang";
+import { config } from "../../config";
 import { createRequestLogger } from "../../utils/logger";
 import {
   ActionExecutionResult,
   ActionItem,
-  normalizeActionMessage,
   SupportedPlatform,
   executeActions,
   safeBroadcast,
@@ -15,6 +21,8 @@ import {
 export type { SupportedPlatform } from "../actions";
 import { ensureConversation } from "../conversation";
 import { findFaqAnswer } from "../faq";
+
+const toJson = (v: unknown) => normalizeJson(v);
 
 export type ProcessIncomingParams = {
   botId: string;
@@ -74,7 +82,6 @@ async function getRelevantKnowledgeForBotMessage(params: {
 }): Promise<KnowledgeChunkLite[]> {
   const { botId, tenant, text, limit = 5 } = params;
 
-  // แยก keyword แบบง่าย ๆ จากข้อความลูกค้า (ไม่ต้องพึ่ง vector DB)
   const keywords = text
     .split(/\s+/)
     .map((w) => w.toLowerCase().replace(/[^\p{L}\p{N}]/gu, ""))
@@ -103,10 +110,7 @@ async function getRelevantKnowledgeForBotMessage(params: {
         },
       },
     },
-    orderBy: [
-      { updatedAt: "desc" },
-      { createdAt: "desc" },
-    ],
+    orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
     take: limit,
   });
 
@@ -123,9 +127,7 @@ function buildKnowledgeSummary(chunks: KnowledgeChunkLite[]): {
   docIds: string[];
   chunkIds: string[];
 } {
-  if (chunks.length === 0) {
-    return { summary: "", docIds: [], chunkIds: [] };
-  }
+  if (chunks.length === 0) return { summary: "", docIds: [], chunkIds: [] };
 
   const lines: string[] = [];
   let totalLength = 0;
@@ -134,7 +136,6 @@ function buildKnowledgeSummary(chunks: KnowledgeChunkLite[]): {
 
   for (const chunk of chunks) {
     if (totalLength >= maxTotalLength) break;
-
     const content = chunk.content.slice(0, maxChunkLength);
     const line = `- [doc: ${chunk.docTitle}] ${content}`;
     totalLength += line.length;
@@ -149,8 +150,13 @@ function buildKnowledgeSummary(chunks: KnowledgeChunkLite[]): {
 }
 
 function todayKey(): string {
-  // YYYY-MM-DD (ใช้เป็น key ของ StatDaily)
   return new Date().toISOString().slice(0, 10);
+}
+
+function fallbackThanks(lang: string): string {
+  if (lang === "lo") return "ຂອບໃຈເດີ";
+  if (lang === "en") return "Thanks.";
+  return "ขอบคุณค่ะ";
 }
 
 export async function processIncomingMessage(
@@ -168,21 +174,19 @@ export async function processIncomingMessage(
   } = params;
 
   const log = createRequestLogger(requestId);
+  const incomingType: MessageType = params.messageType ?? MessageType.TEXT;
 
-  // ถ้าข้อความว่าง ให้ตอบ fallback เลย (กันเคสส่งมาเป็น empty)
-  if (!text || !text.trim()) {
-    return {
-      reply: "ขออภัยค่ะ ระบบขัดข้องชั่วคราว ลองใหม่อีกครั้งภายหลังนะคะ",
-      intent: "other",
-      isIssue: false,
-      actions: [],
-    };
-  }
+  const safeText =
+    text?.trim() ||
+    (incomingType !== MessageType.TEXT
+      ? `[${incomingType.toLowerCase()}]`
+      : "");
 
-  // ค่าตอบ fallback ถ้าพัง
+  const replyLang = detectReplyLang(safeText);
+
   const fallback: ProcessIncomingResult = {
-    reply: "ขออภัยค่ะ ระบบขัดข้องชั่วคราว ลองใหม่อีกครั้งภายหลังนะคะ",
-    intent: "other",
+    reply: fallbackSystemError(replyLang),
+    intent: "system_error",
     isIssue: false,
     actions: [],
   };
@@ -205,28 +209,42 @@ export async function processIncomingMessage(
       return fallback;
     }
 
+    const aiEnabled = bot.config.aiEnabled ?? true;
+    if (!aiEnabled) {
+      console.log("[processIncomingMessage] AI disabled for this bot", {
+        botId: bot.id,
+      });
+      skipAi = true;
+    }
+
     const now = new Date();
 
-    // 1) หา/สร้าง ChatSession ก่อน
-    //    ใช้ unique constraint botId_userId
+    // 1) upsert ChatSession
     const session = await prisma.chatSession.upsert({
       where: {
         botId_userId: {
-          botId: bot.id,
+          botId,
           userId,
         },
       },
       update: {
         lastMessageAt: now,
-        displayName: displayName ?? undefined,
+        displayName,
+        lastText: text,
+        lastDirection: "user",
+        hasProblem: false,
       },
       create: {
         tenant: bot.tenant,
-        botId: bot.id,
+        botId,
         platform,
         userId,
-        displayName: displayName ?? undefined,
+        displayName,
+        status: "open",
         lastMessageAt: now,
+        lastText: text,
+        lastDirection: "user",
+        hasProblem: false,
       },
     });
 
@@ -238,7 +256,7 @@ export async function processIncomingMessage(
       requestId,
     });
 
-    // 2) กัน duplicate message ด้วย platformMessageId
+    // 2) dedupe by platformMessageId
     if (platformMessageId) {
       const dup = await prisma.chatMessage.findFirst({
         where: {
@@ -254,7 +272,6 @@ export async function processIncomingMessage(
           platformMessageId,
         });
 
-        // ไม่ทำอะไรซ้ำ ไม่ตอบลูกค้าอีกรอบ
         return {
           reply: "",
           intent: "duplicate",
@@ -263,10 +280,7 @@ export async function processIncomingMessage(
       }
     }
 
-    const incomingType: MessageType = params.messageType ?? "TEXT";
-    const safeText = text?.trim() || (incomingType !== "TEXT" ? `[${incomingType.toLowerCase()}]` : "");
-
-    // 3) บันทึกข้อความฝั่ง user → ChatMessage
+    // 3) create ChatMessage (user)
     const userChatMessage = await prisma.chatMessage.create({
       data: {
         tenant: bot.tenant,
@@ -278,12 +292,14 @@ export async function processIncomingMessage(
         type: incomingType,
         text: safeText,
         attachmentUrl: params.attachmentUrl ?? null,
-        attachmentMeta: params.attachmentMeta ?? undefined,
+        attachmentMeta: params.attachmentMeta
+          ? toJson(params.attachmentMeta)
+          : null,
         platformMessageId: platformMessageId ?? null,
-        meta: {
+        meta: toJson({
           source: platform,
           rawPayload: rawPayload ?? null,
-        },
+        }),
       },
       select: {
         id: true,
@@ -296,30 +312,80 @@ export async function processIncomingMessage(
       },
     });
 
-    // broadcast SSE (ฝั่ง user)
+    // SSE: new user message
     safeBroadcast({
       type: "chat:message:new",
       tenant: bot.tenant,
-      botId: bot.id,
-      sessionId: session.id,
-      conversationId: conversation.id,
-      message: {
-        id: userChatMessage.id,
-        senderType: "user",
-        text: userChatMessage.text,
-        type: userChatMessage.type,
-        attachmentUrl: userChatMessage.attachmentUrl,
-        attachmentMeta: userChatMessage.attachmentMeta,
-        createdAt: userChatMessage.createdAt,
+      data: {
+        botId: bot.id,
+        sessionId: session.id,
+        conversationId: conversation.id,
+        message: userChatMessage,
+        from: "user",
       },
     });
 
-    // ถ้าไม่ใช่ข้อความ text ให้หยุดที่นี่ (ไม่ต้องเรียก AI)
-    if (incomingType !== "TEXT") {
-      return { reply: "", intent: "non_text", isIssue: false, actions: [] };
+    // ==== กรณี non-text: ตอบขอข้อมูลเพิ่มเติม แล้วจบเลย ====
+    if (incomingType !== MessageType.TEXT) {
+      const reply = fallbackNeedMoreInfo(replyLang);
+
+      const botChatMessage = await prisma.chatMessage.create({
+        data: {
+          tenant: bot.tenant,
+          botId: bot.id,
+          platform,
+          sessionId: session.id,
+          conversationId: conversation.id,
+          senderType: "bot",
+          type: MessageType.TEXT,
+          text: reply,
+          meta: toJson({
+            source: platform,
+            via: "auto_reply",
+            intent: "non_text",
+            isIssue: false,
+            caseId: null,
+            usedKnowledge: false,
+            knowledgeDocIds: [],
+            knowledgeChunkIds: [],
+            faqId: null,
+          }),
+        },
+        select: {
+          id: true,
+          text: true,
+          type: true,
+          conversationId: true,
+          createdAt: true,
+        },
+      });
+
+      // SSE: new bot message
+      safeBroadcast({
+        type: "chat:message:new",
+        tenant: bot.tenant,
+        data: {
+          botId: bot.id,
+          sessionId: session.id,
+          conversationId: conversation.id,
+          message: botChatMessage,
+          from: "bot",
+        },
+      });
+
+      await prisma.chatSession.update({
+        where: { id: session.id },
+        data: {
+          lastMessageAt: botChatMessage.createdAt,
+          lastText: botChatMessage.text,
+          lastDirection: "bot",
+        },
+      });
+
+      return { reply, intent: "non_text", isIssue: false, actions: [] };
     }
 
-    // ตรวจ FAQ แบบรวดเร็ว หากเจอให้ตอบทันทีและไม่เรียก AI
+    // 4) FAQ ก่อน
     const faq = await findFaqAnswer(bot.id, safeText, requestId);
     if (faq) {
       skipAi = true;
@@ -327,8 +393,8 @@ export async function processIncomingMessage(
       faqAnswer = faq.answer;
     }
 
-    // 4) เตรียม client OpenAI ตาม secret/config ของบอท
-    let openai;
+    // 5) OpenAI client
+    let openai: ReturnType<typeof getOpenAIClientForBot> | null = null;
     try {
       openai = skipAi ? null : getOpenAIClientForBot(bot as BotWithRelations);
     } catch (err) {
@@ -336,19 +402,21 @@ export async function processIncomingMessage(
         "[processIncomingMessage] getOpenAIClientForBot error",
         (err as any)?.message ?? err
       );
-      // ถ้าไม่มี key หรือสร้าง client ไม่ได้ → ตอบ fallback เลย
       return fallback;
     }
 
-    // 4.1) ดึง knowledge ที่เกี่ยวข้องกับข้อความนี้ (ถ้ามี)
+    // 5.1) knowledge
     const knowledgeChunks = await getRelevantKnowledgeForBotMessage({
       botId: bot.id,
       tenant: bot.tenant,
-      text,
+      text: safeText,
     });
 
-    const { summary: knowledgeSummary, docIds: knowledgeDocIds, chunkIds } =
-      buildKnowledgeSummary(knowledgeChunks);
+    const {
+      summary: knowledgeSummary,
+      docIds: knowledgeDocIds,
+      chunkIds,
+    } = buildKnowledgeSummary(knowledgeChunks);
 
     if (knowledgeChunks.length > 0) {
       console.log("[processIncomingMessage] knowledge", {
@@ -358,7 +426,7 @@ export async function processIncomingMessage(
       });
     }
 
-    // 5) เตรียม intents สำหรับส่งเข้า prompt
+    // 6) intents for prompt
     const intentsForPrompt =
       bot.intents && bot.intents.length > 0
         ? bot.intents
@@ -372,7 +440,7 @@ export async function processIncomingMessage(
   keywords: ${keywords.join(", ")}`;
             })
             .join("\n")
-        : "ไม่พบ intent ใด ๆ ให้ตอบ intent = other";
+        : 'ไม่พบ intent ใด ๆ ให้ตอบ intent = "other"';
 
     const baseSystemPrompt =
       bot.config.systemPrompt ||
@@ -400,13 +468,25 @@ ${intentsForPrompt}
 }
 `.trim();
 
-    const systemPrompt = `${baseSystemPrompt}\n\n${classificationInstruction}`;
+    const languagePolicy = `
+LANGUAGE POLICY:
+- The JSON field "reply" MUST be written in ${langLabel(replyLang)}.
+- If the user mixes languages, follow the language used in the latest user message.
+- Keep brand names / usernames as-is. Do not translate proper nouns.
+`.trim();
 
+    const systemPrompt = `${baseSystemPrompt}\n\n${languagePolicy}\n\n${classificationInstruction}`;
     const model = bot.config.model || "gpt-4o-mini";
 
     let rawContent: any = "{}";
+
     if (!skipAi && openai) {
-      // 6) เรียก OpenAI ให้จัด intent + บทตอบ
+      console.log("[AI] calling OpenAI", {
+        botId: bot.id,
+        model,
+        text: safeText,
+      });
+
       const completion = await openai.chat.completions.create({
         model,
         temperature: bot.config.temperature ?? 0.4,
@@ -422,30 +502,37 @@ ${intentsForPrompt}
                   knowledgeSummary,
               }
             : null,
-          { role: "user", content: text },
+          { role: "user", content: safeText },
         ].filter(Boolean) as any,
       });
 
-      rawContent = completion.choices[0]?.message?.content ?? "{}";
-    } else if (skipAi) {
+      rawContent = completion.choices?.[0]?.message?.content ?? "{}";
+    } else {
+      const replyText =
+        faqAnswer ??
+        (aiEnabled
+          ? safeText
+          : "ขณะนี้ระบบ AI ถูกปิดอยู่ค่ะ พี่พลอยจะยังไม่ตอบอัตโนมัติให้นะคะ");
+
+      const intentCode = faqMeta?.faqId ? "faq" : "other";
+
       rawContent = JSON.stringify({
-        reply: faqAnswer ?? safeText,
-        intent: "faq",
+        reply: replyText,
+        intent: intentCode,
         isIssue: false,
       });
     }
 
-    // กรณี content เป็น array (รองรับ format บางแบบของ lib)
     if (Array.isArray(rawContent)) {
       rawContent = rawContent
         .map((p: any) =>
-          typeof p === "string" ? p : p?.text ?? p?.content ?? ""
+          typeof p === "string" ? p : (p?.text ?? p?.content ?? "")
         )
         .join("");
     }
 
     let parsed: ProcessIncomingResult = {
-      reply: "ขอบคุณสำหรับข้อมูลค่ะ",
+      reply: fallbackThanks(replyLang),
       intent: "other",
       isIssue: false,
       actions: [],
@@ -458,13 +545,15 @@ ${intentsForPrompt}
         reply:
           typeof json.reply === "string"
             ? json.reply
-            : "ขอบคุณสำหรับข้อมูลค่ะ",
+            : fallbackThanks(replyLang),
         intent: typeof json.intent === "string" ? json.intent : "other",
         isIssue: Boolean(json.isIssue),
         actions: [],
       };
 
-      aiActions = Array.isArray(json.actions) ? (json.actions as ActionItem[]) : [];
+      aiActions = Array.isArray(json.actions)
+        ? (json.actions as ActionItem[])
+        : [];
     } catch (err) {
       console.error(
         "[processIncomingMessage] JSON parse error from GPT",
@@ -473,11 +562,11 @@ ${intentsForPrompt}
       );
     }
 
-    const reply = parsed.reply || "ขอบคุณสำหรับข้อมูลค่ะ";
+    const reply = parsed.reply || fallbackThanks(replyLang);
     const intent = parsed.intent || "other";
     const isIssue = Boolean(parsed.isIssue);
 
-    // 7) ถ้าเป็นเคสปัญหา → บันทึก CaseItem + StatDaily
+    // 7) case + stats
     let caseId: string | null = null;
     const dateKey = todayKey();
 
@@ -492,10 +581,12 @@ ${intentsForPrompt}
             userId,
             kind: intent,
             text,
-            meta: {
+            meta: toJson({
+              intent,
+              isIssue,
               source: platform,
               rawPayload: rawPayload ?? null,
-            },
+            }),
           },
           select: {
             id: true,
@@ -506,6 +597,11 @@ ${intentsForPrompt}
         });
 
         caseId = createdCase.id;
+
+        await prisma.chatSession.update({
+          where: { id: session.id },
+          data: { hasProblem: true },
+        });
 
         await prisma.statDaily.upsert({
           where: {
@@ -529,7 +625,6 @@ ${intentsForPrompt}
           },
         });
 
-        // SSE: case + stats
         safeBroadcast({
           type: "case:new",
           tenant: bot.tenant,
@@ -557,7 +652,6 @@ ${intentsForPrompt}
         );
       }
     } else {
-      // non-issue แต่อาจอยากนับสถิติข้อความรวมด้วยก็ได้
       try {
         await prisma.statDaily.upsert({
           where: {
@@ -596,7 +690,7 @@ ${intentsForPrompt}
       }
     }
 
-    // 8) บันทึกข้อความฝั่ง bot + SSE
+    // 8) bot message + update session
     if (reply) {
       try {
         const botChatMessage = await prisma.chatMessage.create({
@@ -607,9 +701,9 @@ ${intentsForPrompt}
             sessionId: session.id,
             conversationId: conversation.id,
             senderType: "bot",
-            type: "TEXT",
+            type: MessageType.TEXT,
             text: reply,
-            meta: {
+            meta: toJson({
               source: platform,
               via: "auto_reply",
               intent,
@@ -619,7 +713,7 @@ ${intentsForPrompt}
               knowledgeDocIds,
               knowledgeChunkIds: chunkIds,
               faqId: faqMeta?.faqId ?? null,
-            },
+            }),
           },
           select: {
             id: true,
@@ -630,18 +724,25 @@ ${intentsForPrompt}
           },
         });
 
+        // SSE: new bot message
         safeBroadcast({
           type: "chat:message:new",
           tenant: bot.tenant,
-          botId: bot.id,
-          sessionId: session.id,
-          conversationId: conversation.id,
-          message: {
-            id: botChatMessage.id,
-            senderType: "bot",
-            text: botChatMessage.text,
-            type: botChatMessage.type,
-            createdAt: botChatMessage.createdAt,
+          data: {
+            botId: bot.id,
+            sessionId: session.id,
+            conversationId: conversation.id,
+            message: botChatMessage,
+            from: "bot",
+          },
+        });
+
+        await prisma.chatSession.update({
+          where: { id: session.id },
+          data: {
+            lastMessageAt: botChatMessage.createdAt,
+            lastText: botChatMessage.text,
+            lastDirection: "bot",
           },
         });
       } catch (err) {
@@ -652,8 +753,8 @@ ${intentsForPrompt}
       }
     }
 
+    // 9) actions
     const actionsToRun = aiActions;
-
     if (actionsToRun.length > 0) {
       actionResults = await executeActions(actionsToRun, {
         bot: bot as BotWithRelations,
@@ -672,7 +773,6 @@ ${intentsForPrompt}
       "[processIncomingMessage] fatal error",
       (err as any)?.message ?? err
     );
-    // อย่าโยน error ออกไป ให้ส่ง fallback กลับ
     return { ...fallback, actions: actionResults };
   }
 }

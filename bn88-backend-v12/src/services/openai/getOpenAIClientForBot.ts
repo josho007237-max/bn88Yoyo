@@ -33,3 +33,4 @@ export function getOpenAIClientForBot(bot: BotWithSecrets) {
 
   return client;
 }
+

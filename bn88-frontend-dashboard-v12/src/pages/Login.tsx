@@ -1,10 +1,6 @@
-// src/pages/Login.tsx
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { getApiBase, login } from "../lib/api";
-
-const TOKEN_KEY = "bn9_jwt";   // ✅ แก้ให้ตรงกับ lib/api และ main.tsx
-
+import { getApiBase, login, TOKEN_KEY } from "../lib/api";
 
 export default function Login() {
   const nav = useNavigate();
@@ -15,10 +11,8 @@ export default function Login() {
   const [err, setErr] = useState<string | null>(null);
   const [showPwd, setShowPwd] = useState(false);
 
-  // ถ้ามี token แล้ว → เด้งเข้าหน้า /bots (หรือเปลี่ยนเป็น "/" หากต้องการ)
   useEffect(() => {
     try {
-      // migrate legacy key (ถ้ามี)
       const legacy = localStorage.getItem("BN9_TOKEN");
       if (legacy && !localStorage.getItem(TOKEN_KEY)) {
         localStorage.setItem(TOKEN_KEY, legacy);
@@ -27,7 +21,7 @@ export default function Login() {
       const tok = localStorage.getItem(TOKEN_KEY);
       if (tok && tok.trim()) nav("/bots", { replace: true });
     } catch {
-      /* ignore storage errors */
+      // ignore
     }
   }, [nav]);
 
@@ -38,19 +32,14 @@ export default function Login() {
     setErr(null);
     setLoading(true);
     try {
-      const { token } = await login(email.trim(), password);
-      // lib/api.setToken() ถูกเรียกภายใน login แล้ว แต่กันพลาดไว้ซ้ำอีกรอบ
-      try { localStorage.setItem(TOKEN_KEY, token); } catch {}
-      nav("/bots", { replace: true }); // เปลี่ยนเส้นทางตามที่โปรเจกต์ใช้งานจริง
+      await login(email.trim(), password);
+      nav("/bots", { replace: true });
     } catch (ex: any) {
       const msg = String(ex?.message || "");
-      if (/401|unauthorized|invalid/i.test(msg)) {
-        setErr("อีเมลหรือรหัสผ่านไม่ถูกต้อง");
-      } else if (/fetch|network|Failed to fetch|Network Error/i.test(msg)) {
+      if (/401|unauthorized|invalid/i.test(msg)) setErr("อีเมลหรือรหัสผ่านไม่ถูกต้อง");
+      else if (/fetch|network|Failed to fetch|Network Error/i.test(msg))
         setErr("ติดต่อเซิร์ฟเวอร์ไม่ได้ กรุณาตรวจสอบ API Base หรืออินเทอร์เน็ต");
-      } else {
-        setErr(msg || "Login failed");
-      }
+      else setErr(msg || "Login failed");
     } finally {
       setLoading(false);
     }
@@ -65,7 +54,6 @@ export default function Login() {
             <p className="text-xs text-gray-500 mt-1">API: {getApiBase()}</p>
           </div>
 
-          {/* ปุ่มลัดกรอกค่าเดโม่ */}
           <button
             type="button"
             onClick={() => {
@@ -144,4 +132,4 @@ export default function Login() {
       </div>
     </div>
   );
-}    
+}

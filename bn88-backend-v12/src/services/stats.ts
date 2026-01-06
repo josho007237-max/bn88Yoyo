@@ -194,3 +194,4 @@ export async function ensureTodayStat(botId: string): Promise<StatDaily> {
     unfollow: 0,
   });
 }
+

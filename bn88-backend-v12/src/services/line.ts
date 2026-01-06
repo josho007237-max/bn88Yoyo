@@ -41,3 +41,4 @@ export async function sendLinePushMessage(
     throw new Error(`LINE_PUSH_FAILED_${res.status}`);
   }
 }
+

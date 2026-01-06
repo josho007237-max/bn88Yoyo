@@ -9,6 +9,7 @@ import {
 import { sendTelegramMessage } from "../../services/telegram";
 import { MessageType } from "@prisma/client";
 import { createRequestLogger, getRequestId } from "../../utils/logger";
+import { sseHub } from "../../lib/sseHub";
 
 const router = Router();
 
@@ -333,3 +334,4 @@ router.post("/", async (req: Request, res: Response) => {
 
 export default router;
 export { router as telegramWebhookRouter };
+

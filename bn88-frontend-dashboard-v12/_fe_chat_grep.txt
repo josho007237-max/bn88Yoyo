@@ -1,0 +1,36 @@
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\hooks\useLiveEvents.ts:40 const es = new EventSource(url);
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\hooks\useLive.ts:2 const es = new EventSource(`${base}/api/live/${tenant}`);
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\hooks\useTenantSSE.ts:6 const es = new EventSource(`/api/live/${tenant}`);
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\lib\api.ts:473 return `/admin/chat/line-content/${encodeURIComponent(id)}`;
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\lib\api.ts:481 export async function getLineContentBlob(messageId: string): Promise<Blob> {
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\lib\api.ts:834 "/admin/chat/sessions",
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\lib\api.ts:858 const res = await API.get("/admin/chat/messages", {
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\lib\api.ts:876 }>("/admin/chat/messages", {
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\lib\api.ts:908 `/admin/chat/sessions/${encodeURIComponent(sessionId)}/reply`,
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\lib\api.ts:928 `/admin/chat/sessions/${encodeURIComponent(sessionId)}`,
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\lib\api.ts:939 `/admin/chat/sessions/${encodeURIComponent(sessionId)}/meta`,
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\lib\api.ts:962 "/admin/chat/rich-message",
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\lib\api.ts:976 "/admin/chat/search",
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\lib\env.ts:6 const es = new EventSource(url, { withCredentials: false });
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\lib\events.ts:28 // ผูก event listeners ให้ EventSource 1 ตัว
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\lib\events.ts:29 const wire = (es: EventSource) => {
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\lib\events.ts:63 const createSource = () => new EventSource(liveUrl, { withCredentials: false });
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\lib\live.ts:30 const es = new EventSource(url, { withCredentials: false });
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\lib\live.ts:50 // ปิดท่อเพื่อเลิก reconnect อัตโนมัติของ EventSource
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\lib\useSSE.ts:5 const es = new EventSource(`/api/live/${encodeURIComponent(tenant)}`);
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\pages\ChatCenter.tsx:45 getLineContentBlob,
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\pages\ChatCenter.tsx:59 const ENABLE_SSE = true;
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\pages\ChatCenter.tsx:703 const blob = await getLineContentBlob(m.id);
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\pages\ChatCenter.tsx:746 if (!ENABLE_SSE) return;
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\pages\ChatCenter.tsx:761 const es = new EventSource(url);
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\api.ts:184 * GET /api/admin/chat/sessions?botId=...&limit=...
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\api.ts:188 `/api/admin/chat/sessions?botId=${encodeURIComponent(botId)}&limit=${limit}`
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\api.ts:193 * GET /api/admin/chat/sessions/:sessionId/messages?limit=...
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\api.ts:199 `/api/admin/chat/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}`
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\api.ts:204 * POST /api/admin/chat/sessions/:sessionId/reply
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\api.ts:207 j<ReplyResp>(`/api/admin/chat/sessions/${encodeURIComponent(sessionId)}/reply`, {
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\api.ts:214 * GET /api/admin/chat/search?q=...&botId=...&limit=...
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\api.ts:218 `/api/admin/chat/search?q=${encodeURIComponent(q)}&botId=${encodeURIComponent(
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\api.ts:225 * POST /api/admin/chat/rich-message
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\api.ts:228 j<{ ok: boolean; messageId?: string }>(`/api/admin/chat/rich-message`, {
+C:\BN88\BN88-new\bn88-frontend-dashboard-v12\src\api.ts:236 * ใช้ทำ URL ให้ EventSource (ถ้าคุณอยากประกอบ URL จากที่เดียว)
