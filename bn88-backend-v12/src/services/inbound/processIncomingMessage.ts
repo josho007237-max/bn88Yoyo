@@ -2,6 +2,7 @@
 import { toJsonValue as normalizeJson } from "../../lib/jsonValue.js";
 import { MessageType, Prisma } from "@prisma/client";
 import { prisma } from "../../lib/prisma";
+import { createCaseWithDedupe } from "../cases";
 import { getOpenAIClientForBot } from "../openai/getOpenAIClientForBot";
 import {
   detectReplyLang,
@@ -21,6 +22,7 @@ import {
 export type { SupportedPlatform } from "../actions";
 import { ensureConversation } from "../conversation";
 import { findFaqAnswer } from "../faq";
+import { recordMessageStat } from "../stats";
 
 const toJson = (v: unknown) => normalizeJson(v);
 
@@ -312,6 +314,8 @@ export async function processIncomingMessage(
       },
     });
 
+    await recordMessageStat(bot.id, "in");
+
     // SSE: new user message
     safeBroadcast({
       type: "chat:message:new",
@@ -359,6 +363,8 @@ export async function processIncomingMessage(
           createdAt: true,
         },
       });
+
+      await recordMessageStat(bot.id, "out");
 
       // SSE: new bot message
       safeBroadcast({
@@ -572,31 +578,25 @@ LANGUAGE POLICY:
 
     if (isIssue) {
       try {
-        const createdCase = await prisma.caseItem.create({
-          data: {
-            botId: bot.id,
-            tenant: bot.tenant,
-            platform,
-            sessionId: session.id,
-            userId,
-            kind: intent,
-            text,
-            meta: toJson({
-              intent,
-              isIssue,
-              source: platform,
-              rawPayload: rawPayload ?? null,
-            }),
-          },
-          select: {
-            id: true,
-            createdAt: true,
-            text: true,
-            kind: true,
-          },
+        const { caseItem, created } = await createCaseWithDedupe({
+          tenant: bot.tenant,
+          botId: bot.id,
+          platform,
+          sessionId: session.id,
+          userId,
+          kind: intent,
+          text,
+          meta: toJson({
+            intent,
+            isIssue,
+            source: platform,
+            rawPayload: rawPayload ?? null,
+          }),
+          dedupeWindowMs: 15 * 60 * 1000,
+          noteVia: "text",
         });
 
-        caseId = createdCase.id;
+        caseId = caseItem.id;
 
         await prisma.chatSession.update({
           where: { id: session.id },
@@ -625,18 +625,33 @@ LANGUAGE POLICY:
           },
         });
 
-        safeBroadcast({
-          type: "case:new",
-          tenant: bot.tenant,
-          botId: bot.id,
-          case: {
-            id: createdCase.id,
-            text: createdCase.text,
-            kind: createdCase.kind,
-            createdAt: createdCase.createdAt,
-            sessionId: session.id,
-          },
-        });
+        if (created) {
+          safeBroadcast({
+            type: "case:new",
+            tenant: bot.tenant,
+            botId: bot.id,
+            case: {
+              id: caseItem.id,
+              text: caseItem.text,
+              kind: caseItem.kind,
+              createdAt: caseItem.createdAt,
+              sessionId: session.id,
+            },
+          });
+        } else {
+          safeBroadcast({
+            type: "case:update",
+            tenant: bot.tenant,
+            botId: bot.id,
+            case: {
+              id: caseItem.id,
+              status: caseItem.status,
+              updatedAt: caseItem.updatedAt,
+              sessionId: session.id,
+              kind: caseItem.kind,
+            },
+          });
+        }
 
         safeBroadcast({
           type: "stats:update",
@@ -723,6 +738,8 @@ LANGUAGE POLICY:
             createdAt: true,
           },
         });
+
+        await recordMessageStat(bot.id, "out");
 
         // SSE: new bot message
         safeBroadcast({

@@ -1,5 +1,6 @@
 // src/services/activity/intakeActivityFromImage.ts
 import { prisma } from "../../lib/prisma";
+import { createNotificationForCase } from "../notifications";
 import { classifyImageWithOpenAI } from "../vision/classifyImage";
 
 type VisionLabel = "ACTIVITY" | "SLIP" | "OTHER" | "REVIEW";
@@ -169,6 +170,23 @@ export async function intakeActivityFromImage(
     },
   });
 
+  await createNotificationForCase({
+    id: caseItem.id,
+    tenant: p.tenant,
+    botId: p.botId,
+    kind: "activity",
+    userId: p.userId,
+    text: p.evidenceText?.trim() || "[activity-image]",
+    meta: {
+      source: {
+        messageId: p.messageId ?? null,
+        channelKey: p.channelKey ?? null,
+        hasImageDataUrl: true,
+      },
+      vision,
+    },
+  });
+
   return {
     ok: true,
     caseId: caseItem.id,
@@ -179,4 +197,3 @@ export async function intakeActivityFromImage(
         : "รับรูปแล้วค่ะ ระบบขอให้แอดมินช่วยตรวจสอบอีกครั้ง รอสักครู่นะคะ",
   };
 }
-

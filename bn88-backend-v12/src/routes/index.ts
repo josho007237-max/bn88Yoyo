@@ -7,6 +7,10 @@ import botsRouter from "./bots";
 import statsRouter from "./stats";
 import casesRouter from "./cases";
 import devRouter from "./dev";
+import adminCasesRouter from "./admin/cases";
+import adminMetricsRouter from "./admin/metrics";
+import adminNotificationsRouter from "./admin/notifications";
+import telegramWebhookRouter from "./webhooks/telegram";
 
 import lineWebhookRouter from "./webhooks/line";
 
@@ -67,6 +71,7 @@ if (eventsRouter) router.use("/events", eventsRouter);
 /* ------------------------------- webhooks -------------------------------- */
 
 router.use("/webhooks/line", lineWebhookRouter);
+router.use("/webhooks/telegram", telegramWebhookRouter);
 
 /* -------------------------------- admin ---------------------------------- */
 
@@ -75,7 +80,9 @@ router.use("/admin/auth", adminAuthRouter);
 
 // ✅ ส่วน admin อื่น ๆ ค่อยโดน guard
 if (adminBotsRouter) router.use("/admin/bots", authGuard, adminBotsRouter);
+router.use("/admin/cases", authGuard, adminCasesRouter);
 router.use("/admin/chat", authGuard, chatAdminRouter);
+router.use("/admin/metrics", authGuard, adminMetricsRouter);
+router.use("/admin/notifications", authGuard, adminNotificationsRouter);
 
 export default router;
-

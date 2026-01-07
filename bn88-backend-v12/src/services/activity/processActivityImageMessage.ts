@@ -8,6 +8,7 @@ import type { ImageClass as ImageClassType } from "../vision/classifyImage.js";
 import { redeemCode } from "./redeemCode.js";
 import { resolveTodayRuleId } from "./resolveTodayRuleId.js";
 import { toDataUrlFromMaybePath } from "../vision/toDataUrlFromMaybePath.js";
+import { createNotificationForCase } from "../notifications.js";
 
 type VisionResult = {
   classification: ImageClassType; // ACTIVITY | SLIP | OTHER | REVIEW
@@ -182,6 +183,25 @@ export async function processActivityImageMessage(
       select: { id: true },
     });
     caseId = c.id;
+
+    await createNotificationForCase({
+      id: c.id,
+      tenant,
+      botId,
+      kind,
+      userId: p.userId,
+      text: p.captionText?.trim() || `[image:${kind}]`,
+      meta: {
+        vision,
+        pass,
+        attachmentUrl: p.attachmentUrl || null,
+        attachmentMeta: p.attachmentMeta || null,
+        createdFrom: "activity_image_pipeline",
+        requestId: p.requestId || null,
+        upstreamRuleId: p.ruleId || null,
+        upstreamDateKey: p.dateKey || null,
+      },
+    });
   }
 
   // OTHER ตอบทันที

@@ -44,6 +44,18 @@ export default function App() {
             <Link to="/chats" className={navLinkClass("/chats")}>
               Chat Center
             </Link>
+            <Link to="/cases" className={navLinkClass("/cases")}>
+              Cases
+            </Link>
+            <Link
+              to="/notifications"
+              className={navLinkClass("/notifications")}
+            >
+              Notifications
+            </Link>
+            <Link to="/faqs" className={navLinkClass("/faqs")}>
+              FAQ
+            </Link>
             <Link to="/knowledge" className={navLinkClass("/knowledge")}>
               Knowledge
             </Link>

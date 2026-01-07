@@ -5,8 +5,8 @@
   "scripts": {
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "lint": "eslint .",
-    "lint:fix": "eslint . --fix",
+    "lint": "ESLINT_USE_FLAT_CONFIG=false node ./node_modules/eslint/bin/eslint.js .",
+    "lint:fix": "ESLINT_USE_FLAT_CONFIG=false node ./node_modules/eslint/bin/eslint.js . --fix",
     "test": "vitest run --passWithNoTests",
     "dev": "vite --port 5555",
     "build": "vite build",

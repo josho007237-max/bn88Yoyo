@@ -41,6 +41,8 @@ model AdminUser {
 
   // relation หลายต่อหลาย ผ่านตารางกลาง AdminUserRole
   roles AdminUserRole[]
+
+  assignedCases CaseItem[] @relation("CaseAssignee")
 }
 
 model AdminUserRole {
@@ -280,6 +282,9 @@ model CaseItem {
   resolvedAt  DateTime?
   resolvedBy  String?
 
+  assigneeId String?
+  assignee   AdminUser? @relation("CaseAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+
   imageIntakeId String?
   imageIntake   ImageIntake? @relation(fields: [imageIntakeId], references: [id], onDelete: SetNull)
 
@@ -291,6 +296,33 @@ updatedAt DateTime @default(now()) @updatedAt
   @@index([tenant, botId, status], map: "CaseItem_byTenantBotStatus")
 }
 
+model Notification {
+  id     String @id @default(cuid())
+  tenant String
+
+  botId String?
+  bot   Bot?   @relation(fields: [botId], references: [id], onDelete: SetNull)
+
+  caseId String?
+  case   CaseItem? @relation(fields: [caseId], references: [id], onDelete: SetNull)
+
+  kind  String
+  title String
+  body  String?
+
+  isRead   Boolean  @default(false)
+  readAt   DateTime?
+  readById String?
+  readBy   AdminUser? @relation(fields: [readById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenant, isRead, createdAt])
+  @@index([tenant, botId, createdAt])
+  @@index([caseId])
+}
+
 model StatDaily {
   id        String   @id @default(cuid())
   botId     String
@@ -300,6 +332,10 @@ model StatDaily {
   text      Int      @default(0)
   follow    Int      @default(0)
   unfollow  Int      @default(0)
+  messageIn     Int      @default(0)
+  messageOut    Int      @default(0)
+  casesNew      Int      @default(0)
+  casesResolved Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -668,4 +704,6 @@ enum CaseStatus {
   APPROVED
   REJECTED
   NEED_MORE_INFO
+  REVIEW
+  RESOLVED
 }

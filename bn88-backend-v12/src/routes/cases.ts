@@ -3,6 +3,7 @@ import { Router, type Request, type Response } from "express";
 import { z, ZodError } from "zod";
 import { prisma } from "../lib/prisma";
 import { emit } from "../live"; // ใช้สตรีม event: case:new
+import { createNotificationForCase } from "../services/notifications";
 
 const router = Router();
 
@@ -85,6 +86,16 @@ router.post("/", async (req: Request, res: Response) => {
         platform: true,
         createdAt: true,
       },
+    });
+
+    await createNotificationForCase({
+      id: item.id,
+      tenant: bot.tenant,
+      botId: bot.id,
+      kind: data.kind,
+      userId: data.userId,
+      text: data.text,
+      meta: data.meta,
     });
 
     // ส่งอีเวนต์แบบเรียลไทม์ขึ้นแดชบอร์ด
@@ -185,4 +196,3 @@ router.get("/:tenant/recent", async (req: Request, res: Response) => {
 });
 
 export default router;
-

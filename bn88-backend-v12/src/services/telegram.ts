@@ -10,6 +10,11 @@ export type TelegramSendOptions = {
 
 export type TelegramPollOption = { text: string };
 
+type TelegramFileResponse = {
+  ok: boolean;
+  result?: { file_path?: string };
+};
+
 export async function sendTelegramMessage(
   botToken: string,
   chatId: number | string,
@@ -103,6 +108,38 @@ export async function sendTelegramMessage(
   return false;
 }
 
+export async function getTelegramFileUrl(
+  botToken: string,
+  fileId?: string | null
+): Promise<string | null> {
+  if (!fileId) return null;
+  const f = (globalThis as any).fetch as typeof fetch | undefined;
+  if (!f) {
+    console.error("[Telegram] global fetch is not available");
+    return null;
+  }
+
+  try {
+    const url = `https://api.telegram.org/bot${botToken}/getFile?file_id=${encodeURIComponent(
+      fileId
+    )}`;
+    const resp = await f(url);
+    if (!resp.ok) {
+      console.error("[Telegram] getFile error", await resp.text().catch(() => ""));
+      return null;
+    }
+
+    const data = (await resp.json()) as TelegramFileResponse;
+    const filePath = data?.result?.file_path;
+    if (!filePath) return null;
+
+    return `https://api.telegram.org/file/bot${botToken}/${filePath}`;
+  } catch (err) {
+    console.error("[Telegram] getFile error", err);
+    return null;
+  }
+}
+
 export async function startTelegramLive(
   botToken: string,
   channelId: number | string,
@@ -141,4 +178,3 @@ export async function sendTelegramPoll(
   }
   return true;
 }
-
