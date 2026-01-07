@@ -21,3 +21,13 @@
 
 # archives
 **/*.tar.gz
+
+# --- BN88 local & secrets ---
+**/uploads/
+**/*.db
+**/*.sqlite
+**/*.sqlite3
+**/.env
+**/.env.*
+cloudflared*.exe
+_ARCHIVE/
