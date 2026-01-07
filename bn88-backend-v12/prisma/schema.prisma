@@ -41,6 +41,8 @@ model AdminUser {
 
   // relation หลายต่อหลาย ผ่านตารางกลาง AdminUserRole
   roles AdminUserRole[]
+
+  assignedCases CaseItem[] @relation("CaseAssignee")
 }
 
 model AdminUserRole {
@@ -280,6 +282,9 @@ model CaseItem {
   resolvedAt  DateTime?
   resolvedBy  String?
 
+  assigneeId String?
+  assignee   AdminUser? @relation("CaseAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+
   imageIntakeId String?
   imageIntake   ImageIntake? @relation(fields: [imageIntakeId], references: [id], onDelete: SetNull)
 
@@ -300,6 +305,10 @@ model StatDaily {
   text      Int      @default(0)
   follow    Int      @default(0)
   unfollow  Int      @default(0)
+  messageIn     Int      @default(0)
+  messageOut    Int      @default(0)
+  casesNew      Int      @default(0)
+  casesResolved Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -668,4 +677,6 @@ enum CaseStatus {
   APPROVED
   REJECTED
   NEED_MORE_INFO
+  REVIEW
+  RESOLVED
 }

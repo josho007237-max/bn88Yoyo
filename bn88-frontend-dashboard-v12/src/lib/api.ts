@@ -54,6 +54,21 @@ export type BotSecretsSaveResponse = {
   };
 };
 
+export type CaseStatus =
+  | "PENDING"
+  | "REVIEW"
+  | "RESOLVED"
+  | "APPROVED"
+  | "REJECTED"
+  | "NEED_MORE_INFO";
+
+export type CaseAttachment = {
+  url: string;
+  type?: "image" | "file";
+  source?: string;
+  lineContentId?: string | null;
+};
+
 export type CaseItem = {
   id: string;
   botId: string;
@@ -61,8 +76,32 @@ export type CaseItem = {
   text?: string | null;
   kind?: string | null;
   createdAt?: string;
+  platform?: string | null;
+  status?: CaseStatus;
+  reviewNotes?: string | null;
+  resolvedAt?: string | null;
+  resolvedBy?: string | null;
+  assigneeId?: string | null;
+  meta?: unknown;
+  attachments?: CaseAttachment[];
+  bot?: { id: string; name?: string | null };
+  session?: {
+    id: string;
+    displayName?: string | null;
+    userId?: string | null;
+    platform?: string | null;
+  };
+  assignee?: { id: string; email?: string | null };
 };
 export type RecentCasesResponse = { ok: boolean; items: CaseItem[] };
+export type AdminCaseListResponse = {
+  ok: boolean;
+  items: CaseItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
+export type AdminCaseDetailResponse = { ok: boolean; item: CaseItem };
 
 export type DailyStat = {
   botId: string;
@@ -86,6 +125,34 @@ export type RangeResp = {
   ok: boolean;
   items: RangeItem[];
   summary: { total: number; text: number; follow: number; unfollow: number };
+};
+
+export type ChatMetricsItem = {
+  dateKey: string;
+  messageIn: number;
+  messageOut: number;
+  botId?: string;
+};
+
+export type ChatMetricsResponse = {
+  ok: boolean;
+  range: { from: string; to: string };
+  items: ChatMetricsItem[];
+  summary: { messageIn: number; messageOut: number };
+};
+
+export type CaseMetricsItem = {
+  dateKey: string;
+  casesNew: number;
+  casesResolved: number;
+  botId?: string;
+};
+
+export type CaseMetricsResponse = {
+  ok: boolean;
+  range: { from: string; to: string };
+  items: CaseMetricsItem[];
+  summary: { casesNew: number; casesResolved: number };
 };
 
 /* ---- Bot Intents ---- */
@@ -251,7 +318,7 @@ export type FaqEntry = {
   question: string;
   answer: string;
   keywords?: string[] | null;
-  enabled: boolean;
+  enabled?: boolean;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -269,6 +336,57 @@ export type EngagementMessage = {
   createdAt?: string;
   updatedAt?: string;
 };
+
+/* ============================== Knowledge FAQ =============================== */
+
+export async function listFaqs(params?: {
+  botId?: string;
+  q?: string;
+  page?: number;
+  limit?: number;
+}): Promise<{
+  ok: boolean;
+  items: FaqEntry[];
+  total: number;
+  page: number;
+  limit: number;
+  pages: number;
+}> {
+  const res = await API.get(
+    "/admin/ai/knowledge/faq",
+    params?.botId || params?.q
+      ? { params }
+      : undefined
+  );
+  return res.data as any;
+}
+
+export async function createFaq(payload: {
+  botId: string;
+  question: string;
+  answer: string;
+}): Promise<FaqEntry> {
+  const res = await API.post<{ ok: boolean; item: FaqEntry }>(
+    "/admin/ai/knowledge/faq",
+    payload
+  );
+  return (res.data as any).item ?? (res.data as any);
+}
+
+export async function updateFaq(
+  id: string,
+  payload: Partial<{ botId: string; question: string; answer: string }>
+): Promise<FaqEntry> {
+  const res = await API.patch<{ ok: boolean; item: FaqEntry }>(
+    `/admin/ai/knowledge/faq/${encodeURIComponent(id)}`,
+    payload
+  );
+  return (res.data as any).item ?? (res.data as any);
+}
+
+export async function deleteFaq(id: string): Promise<void> {
+  await API.delete(`/admin/ai/knowledge/faq/${encodeURIComponent(id)}`);
+}
 
 /* ============================== Knowledge types ============================== */
 
@@ -765,12 +883,72 @@ export async function getRangeByBot(botId: string, from: string, to: string) {
   ).data;
 }
 
+export async function getChatMetrics(params?: {
+  from?: string;
+  to?: string;
+  botId?: string | null;
+}) {
+  return (
+    await API.get<ChatMetricsResponse>("/admin/metrics/chat", { params })
+  ).data;
+}
+
+export async function getCaseMetrics(params?: {
+  from?: string;
+  to?: string;
+  botId?: string | null;
+}) {
+  return (
+    await API.get<CaseMetricsResponse>("/admin/metrics/cases", { params })
+  ).data;
+}
+
 export async function getRecentByBot(botId: string, limit = 20) {
   return (
     await API.get<RecentCasesResponse>("/cases/recent", {
       params: { botId, limit },
     })
   ).data;
+}
+
+export async function listAdminCases(params?: {
+  status?: string;
+  kind?: string;
+  q?: string;
+  page?: number;
+  pageSize?: number;
+}) {
+  const { data } = await API.get<AdminCaseListResponse>("/admin/cases", {
+    params,
+  });
+  return data;
+}
+
+export async function getAdminCase(id: string) {
+  const { data } = await API.get<AdminCaseDetailResponse>(
+    `/admin/cases/${encodeURIComponent(id)}`
+  );
+  return data;
+}
+
+export async function updateAdminCase(
+  id: string,
+  payload: {
+    status?: CaseStatus;
+    reviewNotes?: string | null;
+    resolvedAt?: string | Date | null;
+    assigneeId?: string | null;
+  }
+) {
+  const body: Record<string, unknown> = { ...payload };
+  if (payload.resolvedAt instanceof Date)
+    body.resolvedAt = payload.resolvedAt.toISOString();
+
+  const { data } = await API.patch<AdminCaseDetailResponse>(
+    `/admin/cases/${encodeURIComponent(id)}`,
+    body,
+  );
+  return data;
 }
 
 export async function getDailyStats(tenant: string) {
@@ -1053,14 +1231,8 @@ export async function updateChatSessionMeta(
 /* =========================== FAQ & Engagement =========================== */
 
 export async function getFaqEntries(botId: string): Promise<FaqEntry[]> {
-  const res = await API.get<{ ok: boolean; items: FaqEntry[] }>(
-    "/admin/bot/faq",
-    {
-      params: { botId },
-    }
-  );
-  const data = res.data as any;
-  return data.items ?? [];
+  const res = await listFaqs({ botId, limit: 200 });
+  return res.items ?? [];
 }
 
 export async function createFaqEntry(payload: {
@@ -1070,26 +1242,22 @@ export async function createFaqEntry(payload: {
   keywords?: string[] | null;
   enabled?: boolean;
 }): Promise<FaqEntry> {
-  const res = await API.post<{ ok: boolean; item: FaqEntry }>(
-    "/admin/bot/faq",
-    payload
-  );
-  return (res.data as any).item ?? (res.data as any);
+  return createFaq({
+    botId: payload.botId,
+    question: payload.question,
+    answer: payload.answer,
+  });
 }
 
 export async function updateFaqEntry(
   id: string,
   payload: Partial<FaqEntry>
 ): Promise<FaqEntry> {
-  const res = await API.put<{ ok: boolean; item: FaqEntry }>(
-    `/admin/bot/faq/${encodeURIComponent(id)}`,
-    payload
-  );
-  return (res.data as any).item ?? (res.data as any);
+  return updateFaq(id, payload);
 }
 
 export async function deleteFaqEntry(id: string): Promise<void> {
-  await API.delete(`/admin/bot/faq/${encodeURIComponent(id)}`);
+  await deleteFaq(id);
 }
 
 export async function getEngagementMessages(
@@ -1542,8 +1710,13 @@ export const api = {
   // Stats
   daily: getDailyByBot,
   range: getRangeByBot,
+  chatMetrics: getChatMetrics,
+  caseMetrics: getCaseMetrics,
   recent: getRecentByBot,
   dailyTenant: getDailyStats,
+  adminCases: listAdminCases,
+  getAdminCase,
+  updateAdminCase,
 
   // Bots
   bots: getBots,

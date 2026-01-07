@@ -1,6 +1,7 @@
 // src/services/chatIngest.ts
 import { prisma } from "../lib/prisma";
 import { ensureConversation } from "./conversation";
+import { recordMessageStat } from "./stats";
 
 /**
  * ผลลัพธ์มาตรฐานของการ ingest ข้อความ
@@ -95,6 +96,11 @@ async function ingestInternal(
         },
       },
     });
+
+    await recordMessageStat(
+      opts.botId,
+      opts.senderType === "user" ? "in" : "out"
+    );
 
     return {
       ok: true,

@@ -7,6 +7,8 @@ import botsRouter from "./bots";
 import statsRouter from "./stats";
 import casesRouter from "./cases";
 import devRouter from "./dev";
+import adminCasesRouter from "./admin/cases";
+import adminMetricsRouter from "./admin/metrics";
 
 import lineWebhookRouter from "./webhooks/line";
 
@@ -75,7 +77,9 @@ router.use("/admin/auth", adminAuthRouter);
 
 // ✅ ส่วน admin อื่น ๆ ค่อยโดน guard
 if (adminBotsRouter) router.use("/admin/bots", authGuard, adminBotsRouter);
+router.use("/admin/cases", authGuard, adminCasesRouter);
 router.use("/admin/chat", authGuard, chatAdminRouter);
+router.use("/admin/metrics", authGuard, adminMetricsRouter);
 
 export default router;
 

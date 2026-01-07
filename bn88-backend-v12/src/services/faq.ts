@@ -14,8 +14,23 @@ export async function findFaqAnswer(
   });
 
   for (const faq of faqs) {
-    if (trimmed.includes(faq.question.toLowerCase())) {
+    const question = (faq.question || "").toLowerCase();
+    const keywords = Array.isArray((faq as any).keywords)
+      ? ((faq as any).keywords as string[])
+      : typeof (faq as any).keywords === "string"
+        ? String((faq as any).keywords)
+            .split(",")
+            .map((k) => k.trim().toLowerCase())
+            .filter(Boolean)
+        : [];
+
+    if (question && trimmed.includes(question)) {
       log.info("[faq] matched", { faqId: faq.id });
+      return { answer: faq.answer, faqId: faq.id };
+    }
+
+    if (keywords.length > 0 && keywords.some((k) => trimmed.includes(k))) {
+      log.info("[faq] matched_keyword", { faqId: faq.id });
       return { answer: faq.answer, faqId: faq.id };
     }
   }

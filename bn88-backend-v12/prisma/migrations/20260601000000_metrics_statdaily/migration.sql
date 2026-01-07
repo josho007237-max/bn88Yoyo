@@ -1,0 +1,5 @@
+-- Add chat/case metric counters to StatDaily
+ALTER TABLE "StatDaily" ADD COLUMN "messageIn" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE "StatDaily" ADD COLUMN "messageOut" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE "StatDaily" ADD COLUMN "casesNew" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE "StatDaily" ADD COLUMN "casesResolved" INTEGER NOT NULL DEFAULT 0;

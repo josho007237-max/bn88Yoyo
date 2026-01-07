@@ -32,10 +32,22 @@ export async function findStatDaily(
 }
 
 /** สร้างแถว StatDaily ใหม่ (ใช้ตอน seed/กรณีพิเศษ) */
+type StatFields =
+  | "total"
+  | "text"
+  | "follow"
+  | "unfollow"
+  | "messageIn"
+  | "messageOut"
+  | "casesNew"
+  | "casesResolved";
+
+type StatPartial = Partial<Pick<StatDaily, StatFields>>;
+
 export async function createStatDaily(
   botId: string,
   dateKey?: string,
-  initial?: Partial<Pick<StatDaily, "total" | "text" | "follow" | "unfollow">>
+  initial?: StatPartial
 ): Promise<StatDaily> {
   if (!botId) throw new Error("missing botId");
   const key = dateKey ?? todayKey();
@@ -50,6 +62,10 @@ export async function createStatDaily(
       text: initial?.text ?? 0,
       follow: initial?.follow ?? 0,
       unfollow: initial?.unfollow ?? 0,
+      messageIn: initial?.messageIn ?? 0,
+      messageOut: initial?.messageOut ?? 0,
+      casesNew: initial?.casesNew ?? 0,
+      casesResolved: initial?.casesResolved ?? 0,
     },
   });
 }
@@ -62,7 +78,7 @@ export async function createStatDaily(
 export async function incrementStatDaily(
   botId: string,
   dateKey?: string,
-  inc: Partial<Record<"total" | "text" | "follow" | "unfollow", number>> = {}
+  inc: Partial<Record<StatFields, number>> = {}
 ): Promise<StatDaily> {
   if (!botId) throw new Error("missing botId");
   const key = dateKey ?? todayKey();
@@ -72,18 +88,24 @@ export async function incrementStatDaily(
   });
 
   if (existing) {
-    const data: {
-      total?: { increment: number };
-      text?: { increment: number };
-      follow?: { increment: number };
-      unfollow?: { increment: number };
-    } = {};
+    const data: Partial<Record<StatFields, { increment: number }>> = {};
 
-    if (typeof inc.total === "number") data.total = { increment: inc.total };
-    if (typeof inc.text === "number") data.text = { increment: inc.text };
-    if (typeof inc.follow === "number") data.follow = { increment: inc.follow };
-    if (typeof inc.unfollow === "number")
-      data.unfollow = { increment: inc.unfollow };
+    const fields: StatFields[] = [
+      "total",
+      "text",
+      "follow",
+      "unfollow",
+      "messageIn",
+      "messageOut",
+      "casesNew",
+      "casesResolved",
+    ];
+
+    for (const field of fields) {
+      if (typeof inc[field] === "number") {
+        data[field] = { increment: inc[field]! } as any;
+      }
+    }
 
     if (Object.keys(data).length === 0) return existing;
 
@@ -105,6 +127,10 @@ export async function incrementStatDaily(
       text: inc.text ?? 0,
       follow: inc.follow ?? 0,
       unfollow: inc.unfollow ?? 0,
+      messageIn: inc.messageIn ?? 0,
+      messageOut: inc.messageOut ?? 0,
+      casesNew: inc.casesNew ?? 0,
+      casesResolved: inc.casesResolved ?? 0,
     },
   });
 }
@@ -116,7 +142,7 @@ export async function incrementStatDaily(
 export async function upsertStatDaily(
   botId: string,
   dateKey?: string,
-  setVals: Partial<Pick<StatDaily, "total" | "text" | "follow" | "unfollow">> = {}
+  setVals: StatPartial = {}
 ): Promise<StatDaily> {
   if (!botId) throw new Error("missing botId");
   const key = dateKey ?? todayKey();
@@ -143,6 +169,10 @@ export async function upsertStatDaily(
       text: setVals.text ?? 0,
       follow: setVals.follow ?? 0,
       unfollow: setVals.unfollow ?? 0,
+      messageIn: setVals.messageIn ?? 0,
+      messageOut: setVals.messageOut ?? 0,
+      casesNew: setVals.casesNew ?? 0,
+      casesResolved: setVals.casesResolved ?? 0,
     },
   });
 }
@@ -192,6 +222,44 @@ export async function ensureTodayStat(botId: string): Promise<StatDaily> {
     text: 0,
     follow: 0,
     unfollow: 0,
+  });
+}
+
+export async function recordMessageStat(
+  botId: string,
+  direction: "in" | "out",
+  dateKey?: string
+): Promise<StatDaily> {
+  const inc: Partial<Record<StatFields, number>> = {
+    total: 1,
+    messageIn: direction === "in" ? 1 : 0,
+    messageOut: direction === "out" ? 1 : 0,
+  };
+
+  return incrementStatDaily(botId, dateKey, inc);
+}
+
+export async function recordCaseStat(
+  botId: string,
+  kind: "new" | "resolved",
+  dateKey?: string
+): Promise<StatDaily> {
+  const inc: Partial<Record<StatFields, number>> = {
+    casesNew: kind === "new" ? 1 : 0,
+    casesResolved: kind === "resolved" ? 1 : 0,
+  };
+
+  return incrementStatDaily(botId, dateKey, inc);
+}
+
+export async function getMetricRange(
+  tenant: string,
+  from: string,
+  to: string
+): Promise<StatDaily[]> {
+  return prisma.statDaily.findMany({
+    where: { tenant, dateKey: { gte: from, lte: to } },
+    orderBy: { dateKey: "asc" },
   });
 }
 
