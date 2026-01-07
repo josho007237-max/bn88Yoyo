@@ -1,44 +1,83 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.startProcessor = void 0;
-const bullmq_1 = require("bullmq");
-const lineMessaging_service_1 = require("../services/lineMessaging.service");
-const campaign_repo_1 = require("../repositories/campaign.repo");
-const env_1 = require("../config/env");
+import { Worker } from 'bullmq';
+import { LineMessaging } from '../services/lineMessaging.service';
+import { CampaignRepo } from '../repositories/campaign.repo';
+import { env } from '../config/env';
+import { log } from '../utils/logger';
 const connection = {
-    host: env_1.env.REDIS_HOST,
-    port: env_1.env.REDIS_PORT,
+    host: env.REDIS_HOST,
+    port: env.REDIS_PORT,
 };
-const startProcessor = () => {
-    const worker = new bullmq_1.Worker('messages', async (job) => {
+export const startMessageProcessor = () => {
+    const worker = new Worker('messages', async (job) => {
         const { to, messages, campaignId, audienceId } = job.data;
         try {
-            await lineMessaging_service_1.LineMessaging.push(to, messages);
+            await LineMessaging.push(to, messages);
             if (campaignId && audienceId) {
-                await campaign_repo_1.CampaignRepo.recordDelivery(campaignId, audienceId, 'sent', new Date());
+                await CampaignRepo.recordDelivery(campaignId, audienceId, 'sent', new Date());
             }
             return { ok: true };
         }
         catch (err) {
             if (campaignId && audienceId) {
-                await campaign_repo_1.CampaignRepo.recordDelivery(campaignId, audienceId, 'failed', undefined, err?.message);
+                await CampaignRepo.recordDelivery(campaignId, audienceId, 'failed', undefined, err?.message);
             }
             throw err;
         }
     }, {
         connection,
-        concurrency: env_1.env.WORKER.CONCURRENCY,
+        concurrency: env.WORKER.CONCURRENCY,
         limiter: {
-            max: env_1.env.WORKER.RATE_MAX,
-            duration: env_1.env.WORKER.RATE_DURATION_MS,
+            max: env.WORKER.RATE_MAX,
+            duration: env.WORKER.RATE_DURATION_MS,
         },
     });
     worker.on('completed', job => {
-        console.log('Job completed', job.id);
+        log('Message job completed', { id: job.id });
     });
     worker.on('failed', (job, err) => {
-        console.error('Job failed', job?.id, err?.message || err);
+        console.error('Message job failed', job?.id, err?.message || err);
     });
     return worker;
 };
-exports.startProcessor = startProcessor;
+export const startCampaignProcessor = () => {
+    const worker = new Worker('line-campaign', async (job) => {
+        const { campaignId } = job.data;
+        const campaign = await CampaignRepo.get(campaignId);
+        if (!campaign) {
+            throw new Error('Campaign not found');
+        }
+        try {
+            await CampaignRepo.setStatus(campaignId, 'running');
+            const totalTargets = campaign.totalTargets ?? 1;
+            // Simulate work by incrementing counts.
+            await CampaignRepo.incrementCounts(campaignId, totalTargets, 0);
+            await CampaignRepo.setStatus(campaignId, 'completed');
+            log('Campaign completed', { campaignId, totalTargets });
+            return { ok: true };
+        }
+        catch (err) {
+            await CampaignRepo.incrementCounts(campaignId, 0, 1);
+            await CampaignRepo.setStatus(campaignId, 'failed');
+            throw err;
+        }
+    }, {
+        connection,
+        concurrency: env.WORKER.CONCURRENCY,
+        limiter: {
+            max: env.WORKER.RATE_MAX,
+            duration: env.WORKER.RATE_DURATION_MS,
+        },
+    });
+    worker.on('completed', job => {
+        log('Campaign job completed', { id: job.id });
+    });
+    worker.on('failed', (job, err) => {
+        console.error('Campaign job failed', job?.id, err?.message || err);
+    });
+    return worker;
+};
+export const startAllProcessors = () => {
+    const messageWorker = startMessageProcessor();
+    const campaignWorker = startCampaignProcessor();
+    return [messageWorker, campaignWorker];
+};

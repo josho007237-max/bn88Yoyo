@@ -1,45 +1,48 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.createApp = void 0;
-const express_1 = __importDefault(require("express"));
-const cors_1 = __importDefault(require("cors"));
-const error_1 = require("./middleware/error");
-const basicAuth_1 = require("./middleware/basicAuth");
-const message_queue_1 = require("./queues/message.queue");
-const express_2 = require("@bull-board/express");
-const bullMQAdapter_1 = require("@bull-board/api/bullMQAdapter");
-const api_1 = require("@bull-board/api");
-const createApp = () => {
-    const app = (0, express_1.default)();
-    // 기본 미들웨어
-    app.use((0, cors_1.default)());
-    app.use(express_1.default.json());
-    // Health check
+import express from "express";
+import cors from "cors";
+import helmet from "helmet";
+import { router as botRouter } from "./routes/bot.routes";
+import { router as groupRouter } from "./routes/group.routes";
+import { router as campaignRouter } from "./routes/campaign.routes";
+import { router as campaignsRouter } from "./routes/campaigns.routes";
+import { router as analyticsRouter } from "./routes/analytics.routes";
+import { router as liffRouter } from "./routes/liff.routes";
+import { router as paymentsRouter } from "./routes/payments.routes";
+import { router as webhookRouter } from "./routes/webhook.routes";
+import { errorHandler } from "./middleware/error";
+import { createBullBoard } from "@bull-board/api";
+import { BullMQAdapter } from "@bull-board/api/bullMQAdapter";
+import { ExpressAdapter } from "@bull-board/express";
+import { messageQueue } from "./queues/message.queue";
+import { campaignQueue } from "./queues/campaign.queue";
+import { basicAuthMiddleware } from "./middleware/basicAuth";
+export const createApp = () => {
+    const app = express();
+    app.use(helmet());
+    app.use(cors());
+    app.use(express.json({ limit: "2mb" }));
     app.get("/health", (_req, res) => {
-        res.json({ ok: true, service: "line-engagement-platform" });
+        res.json({ status: "ok", uptime: process.uptime() });
     });
-    // TODO: ภายหลังค่อยมาใช้ router จริง ๆ
-    // ตัวอย่าง (ยังไม่บังคับใช้):
-    // const webhookRoutes = require("./routes/webhook.routes") as any;
-    // app.use("/webhook/line", webhookRoutes.router ?? webhookRoutes.default ?? webhookRoutes);
-    /* ------------------------------------------------------------------ */
-    /* Bull Board                                                          */
-    /* ------------------------------------------------------------------ */
-    const serverAdapter = new express_2.ExpressAdapter();
+    app.use("/bot", botRouter);
+    app.use("/group", groupRouter);
+    app.use("/campaign", campaignRouter);
+    app.use("/campaigns", campaignsRouter);
+    app.use("/analytics", analyticsRouter);
+    app.use("/liff", liffRouter);
+    app.use("/payments", paymentsRouter);
+    app.use("/webhook", webhookRouter);
+    // Bull Board
+    const serverAdapter = new ExpressAdapter();
     serverAdapter.setBasePath("/admin/queues");
-    (0, api_1.createBullBoard)({
-        // cast เป็น any เพื่อกัน TypeScript งอแงเรื่อง type ของ Job
-        queues: [new bullMQAdapter_1.BullMQAdapter(message_queue_1.messageQueue)],
+    createBullBoard({
+        queues: [
+            new BullMQAdapter(messageQueue),
+            new BullMQAdapter(campaignQueue),
+        ],
         serverAdapter,
     });
-    app.use("/admin/queues", basicAuth_1.basicAuthMiddleware, serverAdapter.getRouter());
-    /* ------------------------------------------------------------------ */
-    /* Error handler                                                       */
-    /* ------------------------------------------------------------------ */
-    app.use(error_1.errorHandler);
+    app.use("/admin/queues", basicAuthMiddleware, serverAdapter.getRouter());
+    app.use(errorHandler);
     return app;
 };
-exports.createApp = createApp;

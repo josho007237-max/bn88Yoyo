@@ -1,6 +1,3 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.BotFlowEngine = void 0;
 const flow = {
     version: '1.0',
     rules: [
@@ -31,7 +28,7 @@ const flow = {
         },
     ],
 };
-exports.BotFlowEngine = {
+export const BotFlowEngine = {
     match: (text, source, _replyToken) => {
         const acts = [];
         for (const rule of flow.rules.filter(r => r.enabled)) {

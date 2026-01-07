@@ -1,8 +1,5 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.env = void 0;
-require("dotenv/config");
-exports.env = {
+import 'dotenv/config';
+export const env = {
     PORT: Number(process.env.PORT || 8080),
     BASE_URL: process.env.BASE_URL || 'http://localhost:8080',
     DATABASE_URL: process.env.DATABASE_URL,

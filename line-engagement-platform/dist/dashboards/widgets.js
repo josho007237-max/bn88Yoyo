@@ -1,7 +1,4 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.Widgets = void 0;
-exports.Widgets = {
+export const Widgets = {
     BotBroadcast: {
         label: 'Broadcast',
         endpoint: '/bot/broadcast',

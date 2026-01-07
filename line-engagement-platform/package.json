@@ -6,7 +6,6 @@
     "dev": "tsx watch src/server.ts",
     "dev:worker": "tsx watch src/workers/worker.ts",
     "prisma:seed": "tsx prisma/seed.ts",
-
     "build": "tsc",
     "start": "node dist/server.js",
     "start:worker": "node dist/workers/worker.js",
@@ -31,7 +30,10 @@
     "redis": "^4.6.5"
   },
   "devDependencies": {
-    "@types/node": "^22.10.1",
+    "@types/basic-auth": "^1.1.8",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.19.3",
     "prisma": "^5.0.0",
     "ts-node": "^10.9.1",
     "ts-node-dev": "^2.0.0",

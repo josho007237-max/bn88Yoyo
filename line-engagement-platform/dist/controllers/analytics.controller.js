@@ -1,12 +1,9 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.eventsFeed = void 0;
-const event_repo_1 = require("../repositories/event.repo");
-const db_1 = require("../config/db");
-const eventsFeed = async (_req, res) => {
-    const last100 = await event_repo_1.EventRepo.recent(100);
-    const stats = await event_repo_1.EventRepo.stats();
-    const deliveries = await db_1.prisma.campaignDelivery.count({
+import { EventRepo } from '../repositories/event.repo';
+import { prisma } from '../config/db';
+export const eventsFeed = async (_req, res) => {
+    const last100 = await EventRepo.recent(100);
+    const stats = await EventRepo.stats();
+    const deliveries = await prisma.campaignDelivery.count({
         where: { status: 'sent' },
     });
     res.json({
@@ -18,4 +15,3 @@ const eventsFeed = async (_req, res) => {
         last100,
     });
 };
-exports.eventsFeed = eventsFeed;

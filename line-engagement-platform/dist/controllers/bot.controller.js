@@ -1,14 +1,10 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.sendFlexSample = exports.sendBroadcast = void 0;
-const lineMessaging_service_1 = require("../services/lineMessaging.service");
-const sendBroadcast = async (req, res) => {
+import { LineMessaging } from '../services/lineMessaging.service';
+export const sendBroadcast = async (req, res) => {
     const { messages } = req.body;
-    await lineMessaging_service_1.LineMessaging.broadcast(messages);
+    await LineMessaging.broadcast(messages);
     res.json({ ok: true });
 };
-exports.sendBroadcast = sendBroadcast;
-const sendFlexSample = async (_req, res) => {
+export const sendFlexSample = async (_req, res) => {
     const flex = {
         type: 'flex',
         altText: 'โปรโมชันใหม่!',
@@ -50,4 +46,3 @@ const sendFlexSample = async (_req, res) => {
     };
     res.json({ message: flex });
 };
-exports.sendFlexSample = sendFlexSample;

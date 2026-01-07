@@ -1,19 +1,29 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.enqueueMessage = exports.messageQueue = void 0;
-const bullmq_1 = require("bullmq");
-const env_1 = require("../config/env");
+import { Queue } from "bullmq";
+import { env } from "../config/env";
 const connection = {
-    host: env_1.env.REDIS_HOST,
-    port: env_1.env.REDIS_PORT,
+    host: env.REDIS_HOST,
+    port: Number(env.REDIS_PORT),
 };
-exports.messageQueue = new bullmq_1.Queue('messages', { connection });
-const enqueueMessage = async (payload) => {
-    return exports.messageQueue.add('send', payload, {
-        attempts: payload.attempts ?? 3,
-        backoff: { type: 'exponential', delay: 5000 },
-        removeOnComplete: 1000,
-        removeOnFail: 1000,
+export const messageQueue = new Queue("messages", { connection });
+const baseOptions = (attempts) => ({
+    attempts: attempts ?? 3,
+    backoff: { type: "exponential", delay: 5000 },
+    removeOnComplete: 1000,
+    removeOnFail: 1000,
+});
+export const enqueueMessage = async (payload) => {
+    return messageQueue.add("send", payload, {
+        ...baseOptions(payload.attempts),
+        jobId: payload.idempotencyKey,
     });
 };
-exports.enqueueMessage = enqueueMessage;
+export const scheduleMessage = async (payload) => {
+    return messageQueue.add("send", payload, {
+        ...baseOptions(payload.attempts),
+        jobId: payload.idempotencyKey,
+        repeat: {
+            pattern: payload.cron,
+            tz: payload.timezone,
+        },
+    });
+};
