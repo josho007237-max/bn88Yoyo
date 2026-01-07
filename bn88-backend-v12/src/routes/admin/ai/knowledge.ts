@@ -22,6 +22,14 @@ const limitNum = (v: unknown, def = 20, min = 1, max = 100) => {
   return Math.min(Math.max(Number.isFinite(x) ? x : def, min), max);
 };
 
+const faqSchema = z.object({
+  botId: z.string().min(1, "botId_required"),
+  question: z.string().min(1, "question_required"),
+  answer: z.string().min(1, "answer_required"),
+});
+
+const faqPartial = faqSchema.partial();
+
 const docSchema = z.object({
   title: z.string().min(1, "title_required"),
   tags: z.string().default(""),
@@ -52,6 +60,117 @@ async function ensureBotAndTenant(botId: string, tenant: string) {
 async function ensureDocTenant(docId: string, tenant: string) {
   return prisma.knowledgeDoc.findFirst({ where: { id: docId, tenant } });
 }
+
+/* ----------------------------------- faq ---------------------------------- */
+
+r.get("/faq", async (req: Request, res: Response) => {
+  try {
+    const tenant = tenantOf(req);
+    const botId = textOr(req.query.botId);
+    const q = textOr(req.query.q);
+    const page = pageNum(req.query.page, 1);
+    const limit = limitNum(req.query.limit, 20);
+    const skip = (page - 1) * limit;
+
+    const where: any = {
+      bot: { tenant },
+    };
+    if (botId) where.botId = botId;
+    if (q) {
+      where.OR = [
+        { question: { contains: q, mode: "insensitive" } },
+        { answer: { contains: q, mode: "insensitive" } },
+      ];
+    }
+
+    const [items, total] = await Promise.all([
+      prisma.fAQ.findMany({
+        where,
+        orderBy: { updatedAt: "desc" },
+        skip,
+        take: limit,
+      }),
+      prisma.fAQ.count({ where }),
+    ]);
+
+    return res.json({
+      ok: true,
+      items,
+      total,
+      page,
+      limit,
+      pages: Math.ceil(total / limit),
+    });
+  } catch (err) {
+    console.error("[knowledge][faq:list]", err);
+    return res.status(500).json({ ok: false, message: "internal_error" });
+  }
+});
+
+r.post("/faq", async (req: Request, res: Response) => {
+  try {
+    const tenant = tenantOf(req);
+    const parsed = faqSchema.safeParse(req.body ?? {});
+    if (!parsed.success)
+      return res.status(400).json({ ok: false, message: "invalid_input" });
+
+    const bot = await ensureBotAndTenant(parsed.data.botId, tenant);
+    if (!bot) return res.status(404).json({ ok: false, message: "bot_not_found" });
+
+    const item = await prisma.fAQ.create({ data: parsed.data });
+    return res.status(201).json({ ok: true, item });
+  } catch (err) {
+    console.error("[knowledge][faq:create]", err);
+    return res.status(500).json({ ok: false, message: "internal_error" });
+  }
+});
+
+r.patch("/faq/:id", async (req: Request, res: Response) => {
+  try {
+    const tenant = tenantOf(req);
+    const exists = await prisma.fAQ.findFirst({
+      where: { id: req.params.id, bot: { tenant } },
+    });
+    if (!exists) return res.status(404).json({ ok: false, message: "not_found" });
+
+    const parsed = faqPartial.safeParse(req.body ?? {});
+    if (!parsed.success)
+      return res.status(400).json({ ok: false, message: "invalid_input" });
+
+    const data: any = { ...parsed.data };
+    if (parsed.data.botId && parsed.data.botId !== exists.botId) {
+      const bot = await ensureBotAndTenant(parsed.data.botId, tenant);
+      if (!bot)
+        return res.status(400).json({ ok: false, message: "bot_not_found" });
+    }
+
+    const item = await prisma.fAQ.update({
+      where: { id: req.params.id },
+      data,
+    });
+
+    return res.json({ ok: true, item });
+  } catch (err) {
+    console.error("[knowledge][faq:update]", err);
+    return res.status(500).json({ ok: false, message: "internal_error" });
+  }
+});
+
+r.delete("/faq/:id", async (req: Request, res: Response) => {
+  try {
+    const tenant = tenantOf(req);
+    const exists = await prisma.fAQ.findFirst({
+      where: { id: req.params.id, bot: { tenant } },
+    });
+    if (!exists) return res.status(404).json({ ok: false, message: "not_found" });
+
+    await prisma.fAQ.delete({ where: { id: req.params.id } });
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("[knowledge][faq:delete]", err);
+    return res.status(500).json({ ok: false, message: "internal_error" });
+  }
+});
 
 /* ----------------------------------- docs ---------------------------------- */
 

@@ -6,7 +6,7 @@ import {
   processIncomingMessage,
   type SupportedPlatform,
 } from "../../services/inbound/processIncomingMessage";
-import { sendTelegramMessage } from "../../services/telegram";
+import { getTelegramFileUrl, sendTelegramMessage } from "../../services/telegram";
 import { MessageType } from "@prisma/client";
 import { createRequestLogger, getRequestId } from "../../utils/logger";
 import { sseHub } from "../../lib/sseHub";
@@ -269,6 +269,19 @@ router.post("/", async (req: Request, res: Response) => {
         .json({ ok: true, skipped: true, reason: "unsupported_message" });
     }
 
+    const fileId = (mapped.attachmentMeta as any)?.fileId as string | undefined;
+    let resolvedAttachmentUrl = mapped.attachmentUrl;
+    if (
+      fileId &&
+      (!resolvedAttachmentUrl || resolvedAttachmentUrl.startsWith("tg:")) &&
+      botToken &&
+      (mapped.messageType === MessageType.IMAGE ||
+        mapped.messageType === MessageType.FILE ||
+        mapped.messageType === MessageType.STICKER)
+    ) {
+      resolvedAttachmentUrl = await getTelegramFileUrl(botToken, fileId);
+    }
+
     const msg = update.message;
     const chat = msg.chat;
     const from = msg.from;
@@ -284,7 +297,7 @@ router.post("/", async (req: Request, res: Response) => {
       userId,
       text,
       messageType: mapped.messageType,
-      attachmentUrl: mapped.attachmentUrl ?? undefined,
+      attachmentUrl: resolvedAttachmentUrl ?? undefined,
       attachmentMeta: mapped.attachmentMeta ?? undefined,
       displayName: from?.first_name || from?.username,
       platformMessageId,
@@ -334,4 +347,3 @@ router.post("/", async (req: Request, res: Response) => {
 
 export default router;
 export { router as telegramWebhookRouter };
-

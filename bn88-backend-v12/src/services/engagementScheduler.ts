@@ -3,6 +3,7 @@ import { scheduleMessageJob } from "../queues/message.queue";
 import { sendTelegramMessage, sendTelegramPoll } from "./telegram";
 import { sendLinePushMessage } from "./line";
 import { createRequestLogger } from "../utils/logger";
+import { recordMessageStat } from "./stats";
 
 async function dispatchEngagement(messageId: string, requestId?: string) {
   const log = createRequestLogger(requestId || messageId);
@@ -59,6 +60,8 @@ async function dispatchEngagement(messageId: string, requestId?: string) {
       meta: { via: "engagement", engagementId: msg.id, type: msg.type },
     },
   });
+
+  await recordMessageStat(msg.botId, "out");
 
   log.info("[engagement] dispatched", { id: msg.id, platform: msg.platform });
 }

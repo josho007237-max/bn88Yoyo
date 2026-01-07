@@ -16,8 +16,12 @@ import BotsPage from "./pages/Bots";
 import BotDetail from "./pages/BotDetail";
 import Login from "./pages/Login";
 import ChatCenter from "./pages/ChatCenter";
+import Cases from "./pages/Cases";
+import CaseDetail from "./pages/CaseDetail";
 import Knowledge from "./pages/Knowledge";
 import MarketingLep from "./pages/MarketingLep";
+import Faqs from "./pages/Faqs";
+import Notifications from "./pages/Notifications";
 
 import Rules from "./pages/Rules";
 import DailyRuleStock from "./pages/DailyRuleStock";
@@ -115,10 +119,42 @@ const router = createBrowserRouter([
         ),
       },
       {
+        path: "cases",
+        element: (
+          <RequireAuth>
+            <Cases />
+          </RequireAuth>
+        ),
+      },
+      {
+        path: "cases/:caseId",
+        element: (
+          <RequireAuth>
+            <CaseDetail />
+          </RequireAuth>
+        ),
+      },
+      {
         path: "knowledge",
         element: (
           <RequireAuth>
             <Knowledge />
+          </RequireAuth>
+        ),
+      },
+      {
+        path: "faqs",
+        element: (
+          <RequireAuth>
+            <Faqs />
+          </RequireAuth>
+        ),
+      },
+      {
+        path: "notifications",
+        element: (
+          <RequireAuth>
+            <Notifications />
           </RequireAuth>
         ),
       },

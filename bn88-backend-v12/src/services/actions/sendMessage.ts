@@ -2,6 +2,7 @@ import { toJsonValue as normalizeJson } from "../../lib/jsonValue.js";
 import { Prisma, MessageType } from "@prisma/client";
 import { enqueueRateLimitedSend } from "../../queues/message.queue";
 import { recordDeliveryMetric } from "../../routes/metrics.live";
+import { recordMessageStat } from "../stats";
 import { sendTelegramMessage } from "../telegram";
 import { prisma } from "../../lib/prisma";
 import { createRequestLogger } from "../../utils/logger";
@@ -91,6 +92,7 @@ const defaultDeps = {
   prisma,
   enqueueRateLimitedSend,
   recordDeliveryMetric,
+  recordMessageStat,
   sendLinePushMessage,
   sendTelegramPayload,
   safeBroadcast,
@@ -139,6 +141,8 @@ export async function executeSendAction(
         createdAt: true,
       },
     });
+
+    await deps.recordMessageStat(bot.id, "out");
 
     await deps.prisma.chatSession.update({
       where: { id: session.id },

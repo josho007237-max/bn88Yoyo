@@ -28,6 +28,8 @@ import {
   type LiveStream,
   type LiveQuestion,
   type LivePoll,
+  type ChatMetricsItem,
+  type CaseMetricsItem,
   getBots,
   getChatSessions,
   getChatMessages,
@@ -48,6 +50,8 @@ import {
   updateEngagementMessage,
   deleteEngagementMessage,
   getLineContentBlob,
+  getChatMetrics,
+  getCaseMetrics,
 } from "../lib/api";
 
 const POLL_INTERVAL_MS = 3000; // 3 วินาที
@@ -64,13 +68,6 @@ type PlatformFilterValue =
   | "webchat"
   | "other";
 type MainTab = "chat" | "automation" | "live" | "rich" | "metrics";
-
-type MetricsSnapshot = {
-  deliveryTotal: number;
-  errorTotal: number;
-  perChannel: Record<string, { sent: number; errors: number }>;
-  updatedAt?: string;
-};
 
 type ConversationGroup = {
   conversationId: string;
@@ -378,7 +375,19 @@ const ChatCenter: React.FC = () => {
   const [sendingRich, setSendingRich] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
-  const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
+  const todayKey = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const defaultMetricsFrom = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 6);
+    return d.toISOString().slice(0, 10);
+  }, []);
+
+  const [chatMetrics, setChatMetrics] = useState<ChatMetricsItem[]>([]);
+  const [caseMetrics, setCaseMetrics] = useState<CaseMetricsItem[]>([]);
+  const [metricsFrom, setMetricsFrom] = useState(defaultMetricsFrom);
+  const [metricsTo, setMetricsTo] = useState(todayKey);
+  const [loadingMetrics, setLoadingMetrics] = useState(false);
+  const [metricsError, setMetricsError] = useState<string | null>(null);
 
   const [liveStreams, setLiveStreams] = useState<LiveStream[]>([]);
   const [liveForm, setLiveForm] = useState({
@@ -441,6 +450,31 @@ const ChatCenter: React.FC = () => {
     });
     imgUrlCreatedRef.current = {};
   }, [selectedSession?.id]);
+
+  const loadMetrics = useCallback(async () => {
+    if (!selectedBotId) return;
+    if (metricsFrom > metricsTo) {
+      setMetricsError("ช่วงวันไม่ถูกต้อง");
+      return;
+    }
+    setLoadingMetrics(true);
+    setMetricsError(null);
+
+    try {
+      const [chatRes, caseRes] = await Promise.all([
+        getChatMetrics({ from: metricsFrom, to: metricsTo, botId: selectedBotId }),
+        getCaseMetrics({ from: metricsFrom, to: metricsTo, botId: selectedBotId }),
+      ]);
+
+      setChatMetrics(chatRes.items ?? []);
+      setCaseMetrics(caseRes.items ?? []);
+    } catch (err) {
+      console.error(err);
+      setMetricsError("โหลดข้อมูล metrics ไม่สำเร็จ");
+    } finally {
+      setLoadingMetrics(false);
+    }
+  }, [selectedBotId, metricsFrom, metricsTo]);
 
   const tenant = import.meta.env.VITE_TENANT || "bn9";
   const apiBase = getApiBase();
@@ -654,6 +688,12 @@ const ChatCenter: React.FC = () => {
 
     void loadSessions();
   }, [selectedBotId, fetchSessions, loadAutomation]);
+
+  useEffect(() => {
+    if (mainTab !== "metrics") return;
+    if (!selectedBotId) return;
+    void loadMetrics();
+  }, [mainTab, selectedBotId, loadMetrics]);
 
   /* ------------------- SSE: รับข้อความใหม่แบบ realtime (Chat) ------------------- */
 
@@ -1540,18 +1580,24 @@ const ChatCenter: React.FC = () => {
     : null;
   const isSearchMode = Boolean(searchResults);
 
-  const channelMetrics = useMemo(
-    () => Object.entries(metrics?.perChannel ?? {}),
-    [metrics?.perChannel]
-  );
-  const channelMetricsData = useMemo(
+  const chatMetricsData = useMemo(
     () =>
-      channelMetrics.map(([channelId, stats]) => ({
-        channelId,
-        sent: stats.sent ?? 0,
-        errors: stats.errors ?? 0,
+      chatMetrics.map((item) => ({
+        dateKey: item.dateKey,
+        inbound: item.messageIn ?? 0,
+        outbound: item.messageOut ?? 0,
       })),
-    [channelMetrics]
+    [chatMetrics]
+  );
+
+  const caseMetricsData = useMemo(
+    () =>
+      caseMetrics.map((item) => ({
+        dateKey: item.dateKey,
+        newCases: item.casesNew ?? 0,
+        resolved: item.casesResolved ?? 0,
+      })),
+    [caseMetrics]
   );
 
   const previewFaq = useMemo(() => faqItems[0] ?? null, [faqItems]);
@@ -2869,46 +2915,116 @@ const ChatCenter: React.FC = () => {
 
       {/* ========================= TAB: METRICS ========================= */}
       {mainTab === "metrics" && (
-        <div className="bg-[#14171a] border border-zinc-800 rounded-xl p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="font-semibold text-sm text-zinc-100">
-              Per-channel deliveries
+        <div className="bg-[#14171a] border border-zinc-800 rounded-xl p-4 space-y-4">
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div>
+              <div className="font-semibold text-sm text-zinc-100">
+                Metrics (Chat & Cases)
+              </div>
+              <div className="text-xs text-zinc-500">
+                ช่วง {metricsFrom} → {metricsTo} | bot: {selectedBotId ?? "-"}
+              </div>
             </div>
-            <div className="text-[11px] text-zinc-500">
-              updatedAt: {metrics?.updatedAt ?? "-"}
+
+            <div className="flex items-center gap-2 text-xs flex-wrap">
+              <label className="text-zinc-400" htmlFor="metrics-from">
+                จาก
+              </label>
+              <input
+                id="metrics-from"
+                type="date"
+                value={metricsFrom}
+                max={metricsTo}
+                onChange={(e) => setMetricsFrom(e.target.value)}
+                className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-100"
+              />
+              <label className="text-zinc-400" htmlFor="metrics-to">
+                ถึง
+              </label>
+              <input
+                id="metrics-to"
+                type="date"
+                value={metricsTo}
+                min={metricsFrom}
+                onChange={(e) => setMetricsTo(e.target.value)}
+                className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-100"
+              />
+              <button
+                type="button"
+                onClick={() => void loadMetrics()}
+                disabled={!selectedBotId || loadingMetrics}
+                className="px-3 py-1 rounded-lg bg-emerald-600 text-white disabled:opacity-50"
+              >
+                {loadingMetrics ? "กำลังโหลด..." : "รีเฟรช"}
+              </button>
             </div>
           </div>
 
-          {channelMetrics.length === 0 ? (
-            <div className="text-xs text-zinc-400">ยังไม่มีข้อมูล</div>
-          ) : (
-            <div className="h-56">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={channelMetricsData}
-                  margin={{ top: 8, right: 8, left: -16 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-                  <XAxis
-                    dataKey="channelId"
-                    interval={0}
-                    angle={-20}
-                    textAnchor="end"
-                    height={50}
-                  />
-                  <YAxis allowDecimals={false} />
-                  <Tooltip />
-                  <Bar dataKey="sent" radius={[4, 4, 0, 0]} name="Sent" />
-                  <Bar dataKey="errors" radius={[4, 4, 0, 0]} name="Errors" />
-                </BarChart>
-              </ResponsiveContainer>
+          {metricsError && (
+            <div className="px-3 py-2 rounded border border-red-700 bg-red-900/30 text-xs text-red-200">
+              {metricsError}
             </div>
           )}
 
-          <div className="text-[11px] text-zinc-500">
-            หมายเหตุ: ถ้าคุณมี endpoint metrics แล้ว เดี๋ยวค่อยผูกเพิ่ม
-            (ตอนนี้เป็น UI เฉย ๆ)
-          </div>
+          {!selectedBotId ? (
+            <div className="text-xs text-zinc-400">กรุณาเลือกบอทเพื่อดู Metrics</div>
+          ) : (
+            <div className="grid md:grid-cols-2 gap-4">
+              <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-900/60 space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="font-semibold text-zinc-100">ข้อความเข้า/ออก</span>
+                  <span className="text-[11px] text-zinc-500">
+                    รวม: in {chatMetricsData.reduce((a, x) => a + x.inbound, 0)} | out {chatMetricsData.reduce((a, x) => a + x.outbound, 0)}
+                  </span>
+                </div>
+                {loadingMetrics ? (
+                  <div className="text-xs text-zinc-400">กำลังโหลด...</div>
+                ) : chatMetricsData.length === 0 ? (
+                  <div className="text-xs text-zinc-400">ยังไม่มีข้อมูลในช่วงที่เลือก</div>
+                ) : (
+                  <div className="h-56">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={chatMetricsData} margin={{ top: 8, right: 8, left: -12 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                        <XAxis dataKey="dateKey" angle={-15} textAnchor="end" height={50} />
+                        <YAxis allowDecimals={false} />
+                        <Tooltip />
+                        <Bar dataKey="inbound" stackId="msgs" fill="#22c55e" radius={[4, 4, 0, 0]} name="ขาเข้า" />
+                        <Bar dataKey="outbound" stackId="msgs" fill="#38bdf8" radius={[4, 4, 0, 0]} name="ขาออก" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </div>
+
+              <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-900/60 space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="font-semibold text-zinc-100">เคสใหม่/ปิด</span>
+                  <span className="text-[11px] text-zinc-500">
+                    รวม: new {caseMetricsData.reduce((a, x) => a + x.newCases, 0)} | resolved {caseMetricsData.reduce((a, x) => a + x.resolved, 0)}
+                  </span>
+                </div>
+                {loadingMetrics ? (
+                  <div className="text-xs text-zinc-400">กำลังโหลด...</div>
+                ) : caseMetricsData.length === 0 ? (
+                  <div className="text-xs text-zinc-400">ยังไม่มีข้อมูลในช่วงที่เลือก</div>
+                ) : (
+                  <div className="h-56">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={caseMetricsData} margin={{ top: 8, right: 8, left: -12 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                        <XAxis dataKey="dateKey" angle={-15} textAnchor="end" height={50} />
+                        <YAxis allowDecimals={false} />
+                        <Tooltip />
+                        <Bar dataKey="newCases" stackId="cases" fill="#f97316" radius={[4, 4, 0, 0]} name="เคสใหม่" />
+                        <Bar dataKey="resolved" stackId="cases" fill="#c084fc" radius={[4, 4, 0, 0]} name="ปิดเคส" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

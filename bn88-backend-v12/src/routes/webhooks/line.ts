@@ -10,6 +10,8 @@ import {
   processIncomingMessage,
   type SupportedPlatform,
 } from "../../services/inbound/processIncomingMessage";
+import { createCaseWithDedupe, pendingTTL } from "../../services/cases";
+import { createNotificationForCase } from "../../services/notifications";
 import { createRequestLogger, getRequestId } from "../../utils/logger";
 import { sseHub } from "../../lib/sseHub";
 import { processActivityImageMessage } from "../../services/activity/processActivityImageMessage.js";
@@ -528,8 +530,7 @@ router.post("/", async (req: Request, res: Response) => {
         const pendingAt = Number(sessionMeta.pendingAt ?? 0);
 
         const pendingExpired =
-          !!pendingKindLocal &&
-          (!pendingAt || now - pendingAt > PENDING_TTL_MS);
+          !!pendingKindLocal && pendingTTL(pendingAt, PENDING_TTL_MS);
 
         if (session?.id && pendingExpired) {
           await prisma.chatSession.update({
@@ -621,6 +622,16 @@ router.post("/", async (req: Request, res: Response) => {
                   note: "question_after_image",
                 } as any,
               } as any,
+            });
+
+            await createNotificationForCase({
+              id: inquiryCase.id,
+              tenant: t,
+              botId,
+              kind: inquiryCase.kind,
+              userId,
+              text: inquiryCase.text,
+              meta: inquiryCase.meta,
             });
 
             sseHub.broadcast({
@@ -763,36 +774,52 @@ router.post("/", async (req: Request, res: Response) => {
                   ? ("deposit_slip" as any)
                   : ("activity" as any);
 
-              caseItem = await prisma.caseItem.create({
-                data: {
-                  tenant: t,
-                  botId,
-                  platform,
-                  sessionId: session.id,
-                  userId,
-                  kind,
-                  text: "[image]",
-                  meta: {
-                    classification: effectiveCls.classification, // REVIEW เก็บได้ใน meta
-                    confidence: effectiveCls.confidence,
-                    lineMessageId: platformMessageId,
-                    imageUrl: publicImageUrl,
-                    originalClassification: cls.classification,
-                    originalConfidence: cls.confidence,
-                  } as any,
-                  imageIntakeId: intake.id,
+              const { caseItem: savedCase, created } = await createCaseWithDedupe({
+                tenant: t,
+                botId,
+                platform,
+                sessionId: session.id,
+                userId,
+                kind,
+                text: "[image]",
+                meta: {
+                  classification: effectiveCls.classification, // REVIEW เก็บได้ใน meta
+                  confidence: effectiveCls.confidence,
+                  lineMessageId: platformMessageId,
+                  imageUrl: publicImageUrl,
+                  originalClassification: cls.classification,
+                  originalConfidence: cls.confidence,
+                } as any,
+                imageIntakeId: intake.id,
+                dedupeWindowMs: 15 * 60 * 1000,
+                noteVia: "image",
+                attachmentUrl: publicImageUrl,
+                noteMeta: {
+                  classification: effectiveCls.classification,
+                  confidence: effectiveCls.confidence,
                 } as any,
               });
 
+              caseItem = savedCase;
+
               sseHub.broadcast({
                 tenant: t,
-                type: "case:new",
-                data: {
-                  caseId: caseItem.id,
-                  kind: caseItem.kind,
-                  botId,
-                  sessionId: session.id,
-                },
+                type: created ? "case:new" : "case:update",
+                data: created
+                  ? {
+                      caseId: savedCase.id,
+                      kind: savedCase.kind,
+                      botId,
+                      sessionId: session.id,
+                    }
+                  : {
+                      caseId: savedCase.id,
+                      kind: savedCase.kind,
+                      botId,
+                      sessionId: session.id,
+                      status: savedCase.status,
+                      updatedAt: savedCase.updatedAt,
+                    },
               });
             }
 

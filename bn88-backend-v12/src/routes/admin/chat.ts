@@ -7,6 +7,7 @@ import { sendTelegramMessage } from "../../services/telegram";
 import { MessageType } from "@prisma/client";
 import { z } from "zod";
 import { recordDeliveryMetric } from "../metrics.live";
+import { recordMessageStat } from "../../services/stats";
 import { createRequestLogger, getRequestId } from "../../utils/logger";
 import { requirePermission } from "../../middleware/basicAuth";
 import { ensureConversation } from "../../services/conversation";
@@ -1279,6 +1280,8 @@ router.post(
           createdAt: true,
         },
       });
+
+      await recordMessageStat(bot.id, "out");
 
       await prisma.chatSession.update({
         where: { id: session.id },
