@@ -1,6 +1,24 @@
+# env (กันคีย์หลุด)
+**/.env
+**/.env.*
+!**/.env.example
 
-_ARCHIVE/
+# node modules
+**/node_modules/
 
+# build
+**/dist/
+**/build/
+**/.next/
+**/.vite/
 
-_ARCHIVE/
+# logs
+**/*.log
 
+# db / local files
+**/*.sqlite
+**/*.db
+**/*.tar.gz
+
+# uploads (ถ้ามี)
+**/uploads/
